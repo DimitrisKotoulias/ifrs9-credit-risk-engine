@@ -1,0 +1,153 @@
+# ── Reproducibility ───────────────────────────────────────────────────────────
+random_seed: 42
+
+# ── Data source ───────────────────────────────────────────────────────────────
+data:
+  source: real               # real | synthetic
+  synthetic_n_loans: 50000
+  kaggle_dataset: "wordsforthewise/lending-club"
+  raw_dir: data/raw
+  interim_dir: data/interim
+  processed_dir: data/processed
+  accepted_file: accepted_2007_to_2018Q4.csv.gz
+  rejected_file: rejected_2007_to_2018Q4.csv.gz
+
+# ── Target definition (PD) ────────────────────────────────────────────────────
+target:
+  bad_statuses:
+    - "Charged Off"
+    - "Default"
+    - "Does not meet the credit policy. Status:Charged Off"
+    - "Late (31-120 days)"
+  good_statuses:
+    - "Fully Paid"
+    - "Does not meet the credit policy. Status:Fully Paid"
+  # Remaining statuses are excluded (indeterminate/immature)
+
+# ── Leakage deny-list (post-origination features) ────────────────────────────
+leakage:
+  deny_list:
+    - recoveries
+    - collection_recovery_fee
+    - total_pymnt
+    - total_pymnt_inv
+    - total_rec_prncp
+    - total_rec_int
+    - total_rec_late_fee
+    - last_pymnt_d
+    - last_pymnt_amnt
+    - next_pymnt_d
+    - last_credit_pull_d
+    - out_prncp
+    - out_prncp_inv
+    - funded_amnt_inv
+    - settlement_status
+    - settlement_date
+    - settlement_amount
+    - settlement_percentage
+    - settlement_term
+    - debt_settlement_flag
+    - debt_settlement_flag_date
+    - hardship_flag
+    - hardship_type
+    - hardship_reason
+    - hardship_status
+    - hardship_amount
+    - hardship_start_date
+    - hardship_end_date
+    - payment_plan_start_date
+    - hardship_length
+    - hardship_dpd
+    - hardship_loan_status
+    - orig_projected_additional_accrued_interest
+    - hardship_payoff_balance_amount
+    - hardship_last_payment_amount
+    - loan_status         # target itself
+  # Features known at origination that override deny-list (if accidentally matched)
+  allow_overrides: []
+
+# ── Train/OOT split (by issue_d) ─────────────────────────────────────────────
+split:
+  train_cutoff: "2015-01-01"   # train = issue_d < this
+  oot_cutoff: "2016-01-01"     # oot = issue_d >= this; in-time test = random sample from train
+  holdout_frac: 0.20           # fraction of train period used as in-time holdout
+
+# ── Scorecard parameters ──────────────────────────────────────────────────────
+scorecard:
+  pdo: 20             # points to double the odds
+  base_score: 600
+  base_odds: 50.0     # good:bad = 50:1 at base_score
+  min_iv: 0.02
+  max_iv: 0.50
+  max_vif: 5.0
+
+# ── LGD ───────────────────────────────────────────────────────────────────────
+lgd:
+  downturn_percentile: 90   # percentile of severity distribution used as downturn LGD
+  min_lgd: 0.0
+  max_lgd: 1.0
+
+# ── Basel IRB ─────────────────────────────────────────────────────────────────
+basel:
+  pd_floor: 0.0003        # 0.03%
+  capital_ratio: 0.08     # 8% minimum capital
+  maturity_adjustment: false  # retail exposures: no maturity adjustment
+  stress_rho: 0.15        # ASRF retail asset correlation for stress test
+  stress_z: -2.0          # Vasicek systematic factor: severe recession (2.28% prob)
+
+# ── Economic Capital (Monte Carlo ASRF loss distribution) ────────────────────
+econ_cap:
+  n_simulations: 50000
+  rho: 0.15            # asset correlation to the systematic factor
+  es_alpha: 0.999      # VaR / Expected Shortfall confidence level
+  seed: 42
+  n_buckets: 50        # PD-ranked buckets for tractable simulation
+
+# ── Macro time-series diagnostics (Granger / AIC lag / Johansen-VECM) ─────────
+macro_ts:
+  max_lag: 4
+
+# ── IFRS 9 ────────────────────────────────────────────────────────────────────
+ifrs9:
+  sicr_pd_multiplier: 2.5    # lifetime PD must increase by this multiple for SICR
+  sicr_abs_threshold: 0.20   # absolute lifetime-PD level that triggers SICR (Stage 2)
+  sicr_dpd_backstop: 30      # days past due backstop for Stage 2
+  stage3_dpd: 90             # days past due for Stage 3
+  # Macro scenarios: probability-weighted
+  # Convention (Vasicek Eq. 15): macro_shock is the systematic factor Z.
+  # Z < 0 = adverse shock (recession, higher hazard); Z > 0 = favourable shock.
+  scenarios:
+    baseline:
+      weight: 0.50
+      macro_shock: 0.0        # no shock = central expectation
+    upside:
+      weight: 0.25
+      macro_shock: 0.3        # positive Z = lower hazard (better economy)
+    downside:
+      weight: 0.25
+      macro_shock: -0.5       # negative Z = higher hazard (worse economy)
+  macro_gamma: 0.8            # γ: hazard scale = exp(γ * macro_shock)
+  # Macro regression: charge-offs lag the cycle and origination underwriting drifts,
+  # so the raw contemporaneous UNRATE coefficient can carry a spurious (negative) sign.
+  macro_unrate_lag: 2              # quarters to lag macro series vs origination cohort
+  macro_enforce_sign_priors: true  # impose economic signs on scenario projection
+
+# ── Business layer ────────────────────────────────────────────────────────────
+business:
+  interest_revenue_rate: 0.12   # annualised interest income rate (proxy)
+  cost_per_approval: 50.0       # operational cost per approved loan (£)
+  # Cut-off economics — RAROC-hurdle decision rule (Phase 9)
+  fee_income_rate: 0.01         # upfront fee income (fraction of EAD)
+  funding_cost_rate: 0.04       # cost of funds (fraction of EAD)
+  operating_cost_rate: 0.015    # servicing/operating cost (fraction of EAD)
+  cost_of_capital: 0.12         # required return on economic capital
+  raroc_hurdle: 0.15            # cost-of-capital hurdle referenced in RAROC framing
+  max_bad_rate: 0.15            # board risk-appetite ceiling on approved bad rate
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  outputs: outputs
+  reports: reports
+  figures: reports/figures
+  models: outputs
+

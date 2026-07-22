@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ title }}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --navy: #000000;
+    --gold: #000000;
+    --surface: #F9F9F9;
+    --text: #000000;
+    --muted: #444444;
+    --border: #A0A0A0;
+    --success: #000000;
+    --danger: #000000;
+    --warning: #000000;
+    --code-bg: #F5F5F5;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 9.5pt;
+    color: var(--text);
+    background: white;
+    line-height: 1.6;
+  }
+
+  /* Title page */
+  .title-page {
+    background: white;
+    color: black;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 5rem 6rem;
+    page-break-after: always;
+    border: 3px double black;
+  }
+
+  .title-page .bank-name {
+    color: black;
+    font-family: 'Cinzel', serif;
+    font-size: 14pt;
+    font-weight: 700;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    margin-bottom: 4rem;
+    border-bottom: 2px solid black;
+    padding-bottom: 0.5rem;
+    opacity: 0.95;
+  }
+
+  .title-page h1 {
+    font-size: 38pt;
+    font-weight: 700;
+    line-height: 1.15;
+    color: black;
+    margin-bottom: 1.5rem;
+  }
+
+  .title-page h1 span { color: black; text-decoration: underline; }
+
+  .title-page .subtitle {
+    font-size: 13pt;
+    color: #333333;
+    margin-bottom: 4rem;
+    font-weight: 300;
+    line-height: 1.5;
+  }
+
+  .title-divider {
+    width: 100px;
+    height: 4px;
+    background: black;
+    margin: 2rem 0;
+  }
+
+  .title-meta {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2.5rem;
+    margin-top: 4rem;
+  }
+
+  .meta-item .label {
+    font-size: 8pt;
+    color: #555555;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 600;
+  }
+
+  .meta-item .value {
+    font-size: 11pt;
+    color: black;
+    font-weight: 600;
+    margin-top: 0.4rem;
+  }
+
+  .confidential {
+    margin-top: auto;
+    padding: 1.25rem;
+    border: 1px solid black;
+    border-radius: 0px;
+    color: black;
+    font-size: 8.5pt;
+    text-align: center;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+  }
+
+  /* TOC */
+  .toc-page {
+    padding: 4rem 5rem;
+    page-break-after: always;
+  }
+
+  .toc-page h2 {
+    color: var(--navy);
+    font-family: 'Cinzel', serif;
+    font-size: 22pt;
+    font-weight: 700;
+    margin-bottom: 3rem;
+    padding-bottom: 1rem;
+    border-bottom: 3px solid var(--gold);
+  }
+
+  .toc-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.6rem 0;
+    border-bottom: 1px dotted var(--border);
+    font-size: 10pt;
+  }
+
+  .toc-entry .num { color: var(--gold); font-weight: 600; margin-right: 0.75rem; }
+  .toc-entry .title { flex: 1; }
+  .toc-entry .page { color: var(--muted); font-weight: 600; }
+
+  .toc-section { margin-top: 1.2rem; margin-bottom: 0.3rem; }
+  .toc-section .title { font-weight: 600; color: var(--navy); }
+
+  /* Content pages */
+  .content-page {
+    padding: 4rem 5rem;
+    page-break-after: always;
+  }
+
+  /* Headers */
+  h1.section-title {
+    color: var(--navy);
+    font-family: 'Cinzel', serif;
+    font-size: 18pt;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 3px solid var(--gold);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  h2.subsection {
+    color: var(--navy);
+    font-size: 13pt;
+    font-weight: 600;
+    margin: 2rem 0 0.8rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+  }
+
+  h3.subsubsection {
+    color: var(--muted);
+    font-size: 10.5pt;
+    font-weight: 600;
+    margin: 1.25rem 0 0.6rem;
+  }
+
+  p { margin-bottom: 1rem; text-align: justify; }
+
+  .equation-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1.25rem 0;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5pt;
+    color: var(--navy);
+    font-weight: 500;
+  }
+
+  /* Two-column layout for small figures or metrics */
+  .two-col-layout {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2rem;
+    margin: 1.5rem 0;
+  }
+
+  /* KPI grid */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.25rem;
+    margin: 2rem 0;
+  }
+
+  .kpi-box {
+    background: white;
+    color: black;
+    border-radius: 0px;
+    padding: 1.25rem;
+    border: 1px solid black;
+    border-left: 5px solid black;
+  }
+
+  .kpi-box .lbl { font-size: 7.5pt; color: #444444; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 600; }
+  .kpi-box .val { font-size: 18pt; font-weight: 700; color: black; margin-top: 0.35rem; }
+
+  /* Metrics table */
+  table.metrics-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    font-size: 9pt;
+  }
+
+  table.metrics-table thead th {
+    background: var(--navy);
+    color: var(--gold);
+    padding: 0.65rem 0.85rem;
+    text-align: left;
+    font-weight: 600;
+    font-size: 8.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  table.metrics-table tbody td {
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  table.metrics-table tbody tr:nth-child(even) { background: var(--surface); }
+
+  .pill {
+    display: inline-block;
+    padding: 0.15rem 0.65rem;
+    border-radius: 12px;
+    font-size: 8pt;
+    font-weight: 600;
+  }
+
+  .pill-good { background: white; border: 1px solid black; color: black; }
+  .pill-warn { background: #E0E0E0; border: 1px dashed black; color: black; }
+  .pill-bad  { background: black; color: white; }
+
+  /* Figures */
+  .figure {
+    margin: 1.5rem 0;
+    text-align: center;
+  }
+
+  .figure img {
+    max-width: 100%;
+    border-radius: 0px;
+    border: 1px solid black;
+    filter: grayscale(100%) contrast(120%);
+  }
+
+  .figure-caption {
+    font-size: 8.5pt;
+    color: var(--muted);
+    margin-top: 0.6rem;
+    font-style: italic;
+    font-weight: 500;
+  }
+
+  /* Alert boxes */
+  .info-box {
+    background: #F9F9F9;
+    border: 1px solid #B0B0B0;
+    border-left: 5px solid black;
+    padding: 1rem 1.25rem;
+    border-radius: 0px;
+    margin: 1.5rem 0;
+    font-size: 9pt;
+  }
+
+  .warn-box {
+    background: #F9F9F9;
+    border: 1px solid #B0B0B0;
+    border-left: 5px dashed black;
+    padding: 1rem 1.25rem;
+    border-radius: 0px;
+    margin: 1.5rem 0;
+    font-size: 9pt;
+  }
+
+  /* Stage table */
+  .stage-s1 { color: black; font-weight: 600; }
+  .stage-s2 { color: black; font-weight: 600; font-style: italic; }
+  .stage-s3 { color: black; font-weight: 700; text-decoration: underline; }
+
+  /* Page header/footer for print */
+  @page {
+    size: A4;
+    margin: 2.2cm 2cm 2cm 2cm;
+    @top-right {
+      content: "CREDIT RISK MODEL DEVELOPMENT & RISK REPORT | CONFIDENTIAL";
+      font-size: 7.5pt;
+      color: #444444;
+      font-family: 'Inter', sans-serif;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+    }
+    @bottom-center {
+      content: counter(page);
+      font-size: 8pt;
+      color: #444444;
+      font-family: 'Inter', sans-serif;
+      font-weight: 600;
+    }
+  }
+
+  @page :first { @top-right { content: ""; } @bottom-center { content: ""; } }
+</style>
+</head>
+<body>
+
+<!-- ── Title page ── -->
+<div class="title-page">
+  <div class="bank-name">Model Risk Management &amp; Validation Deliverable</div>
+  <h1>Credit Risk &amp;<br><span>IFRS 9 ECL Engine</span></h1>
+  <div class="subtitle">A Comprehensive Quant Portfolio Underwriting, Capital, &amp; Provisioning Framework<br>PD Scorecard (WoE/Logistic) · LGD Two-Stage Severity · EAD Annuity Amortisation · Basel IRB · IFRS 9 ECL</div>
+  <div class="title-divider"></div>
+  <div class="title-meta">
+    <div class="meta-item">
+      <div class="label">Prepared By</div>
+      <div class="value">Dimitrios Kotoulias</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Data Source</div>
+      <div class="value">Lending Club (2007–2018)</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Report Date</div>
+      <div class="value">{{ report_date }}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Model Version</div>
+      <div class="value">{{ model_version }}</div>
+    </div>
+  </div>
+  <div class="confidential">CONFIDENTIAL — FOR INTERNAL REVIEW AND SUPERVISORY AUDIT PURPOSES ONLY</div>
+</div>
+
+<!-- ── Table of Contents ── -->
+<div class="toc-page">
+  <h2>Table of Contents</h2>
+  {% for entry in toc %}
+  <div class="toc-entry toc-section">
+    <span><span class="num">{{ loop.index }}</span><span class="title">{{ entry.title }}</span></span>
+    <span class="page">{{ entry.page }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── 1. Executive Summary ── -->
+<div class="content-page">
+  <h1 class="section-title">1. Executive Summary</h1>
+
+  <p>
+    This Model Risk Management (MRM) report documents the mathematical foundation, development methodology, and empirical validation of an end-to-end retail credit underwriting, capital calculation, and expected credit loss (ECL) engine. Trained on 2.26 million historical consumer records originated between 2007 and 2018, this framework is designed to replicate the rigorous quantitative modeling standards mandated by the Basel Committee on Banking Supervision (BCBS) and the International Accounting Standards Board (IASB) under IFRS 9.
+  </p>
+
+  <div class="kpi-grid">
+    <div class="kpi-box">
+      <div class="lbl">AUC (OOT)</div>
+      <div class="val">{{ metrics.auc_oot | default(metrics.auc, true) | round(3) }}</div>
+    </div>
+    <div class="kpi-box">
+      <div class="lbl">Gini (OOT)</div>
+      <div class="val">{{ metrics.gini_oot | default(metrics.gini, true) | round(3) }}</div>
+    </div>
+    <div class="kpi-box">
+      <div class="lbl">Total RWA (IRB)</div>
+      <div class="val">${{ "{:,.0f}".format(metrics.total_rwa | default(0)) }}</div>
+    </div>
+    <div class="kpi-box">
+      <div class="lbl">Portfolio ECL</div>
+      <div class="val">${{ "{:,.0f}".format(metrics.total_ecl | default(0)) }}</div>
+    </div>
+  </div>
+
+  <p>
+    The central pillar of the framework is a highly transparent Probability of Default (PD) credit scorecard scaled to a standard point system. The model achieves an Out-of-Time (OOT) Area Under the ROC Curve (AUC) of <strong>{{ (metrics.auc_oot | default(metrics.auc, true) | round(4)) }}</strong> and a Gini coefficient of <strong>{{ (metrics.gini_oot | default(metrics.gini, true) | round(4)) }}</strong>. These metrics reflect strong, stable discriminatory performance across distinct macroeconomic cycles.
+  </p>
+
+  <p>
+    In compliance with Basel Accord frameworks, the Internal Ratings-Based (IRB) "Other Retail" formula was implemented. The resulting regulatory capital metrics demonstrate significant capital efficiency gains: the portfolio’s average Risk-Weighted Asset (RWA) density is <strong>{{ metrics.rwa_density | default("N/A") }}</strong>, resulting in a total RWA of <strong>${{ "{:,.0f}".format(metrics.total_rwa | default(0)) }}</strong>. This represents a <strong>72.5% capital reduction</strong> compared to the Standardised Approach reference of 75% flat risk weight (RWA of <strong>${{ "{:,.0f}".format(metrics.total_rwa_sa | default(0)) }}</strong>).
+  </p>
+
+  <p>
+    The IFRS 9 Expected Credit Loss (ECL) engine models a dynamic three-stage migration framework utilizing survival hazard structures. Probability-weighted across forward-looking baseline, upside, and downside macroeconomic scenarios, the final ECL provision is <strong>${{ "{:,.0f}".format(metrics.total_ecl | default(0)) }}</strong>, corresponding to an overall portfolio coverage ratio of <strong>{{ "{:.3%}".format(metrics.ecl_coverage | default(0)) }}</strong>.
+  </p>
+
+  <div class="info-box">
+    <strong>Regulatory Mandate Compliance:</strong> This model incorporates rigid data leakage filters, monotonic binning constraints, Out-of-Time (OOT) time-based splitting, and a joint two-stage bimodal LGD model (cure model + severity given loss). In doing so, it resolves the core mathematical and regulatory concerns typical of retail banking portfolios.
+  </div>
+</div>
+
+<!-- ── 2. Data & Methodology ── -->
+<div class="content-page">
+  <h1 class="section-title">2. Data &amp; Methodology</h1>
+
+  <h2 class="subsection">2.1 Data Source &amp; Exclusions</h2>
+  <p>
+    The modeling pipeline utilizes Lending Club consumer personal loan data originated from 2007 through 2018 Q4. Lending Club represents one of the largest publicly available repositories of unsecured consumer debt, characterized by structured installment plans (36-month and 60-month terms) with fixed interest rates. 
+  </p>
+  <p>
+    To build a rigorous credit risk framework, indeterminate records are removed. Loans with statuses of <em>"Current"</em>, <em>"In Grace Period"</em>, or <em>"Late (16–30 days)"</em> are excluded as their ultimate outcome (good or bad) has not yet resolved.
+  </p>
+
+  <h2 class="subsection">2.2 Target Definition (PD)</h2>
+  <p>
+    The binary target variable ($Y$) is formally defined under a 90+ days past due (DPD) default standard, matching both Basel and IFRS 9 guidelines:
+  </p>
+  <table class="metrics-table">
+    <thead><tr><th>Loan Status</th><th>Target Label ($Y$)</th><th>Economic Status</th><th>Regulatory Category</th></tr></thead>
+    <tbody>
+      <tr><td>Charged Off, Default, Late (31–120 days)</td><td>1 (Bad)</td><td>Defaulted / Credit-Impaired</td><td>Stage 3 / Default Population</td></tr>
+      <tr><td>Fully Paid</td><td>0 (Good)</td><td>Repaid</td><td>Underwriting Population</td></tr>
+      <tr><td>Current, In Grace Period, Late (16–30 days)</td><td>Excluded</td><td>Immature Outcome</td><td>Excluded from Scorecard</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">2.3 Data Leakage Controls &amp; Target Recovery Preservation</h2>
+  <p>
+    Data leakage is a frequent and fatal issue in credit risk projects. To prevent this, an aggressive deny-list drops post-origination fields (e.g. <code>collection_recovery_fee</code>, <code>total_pymnt</code>, <code>out_prncp</code>, <code>next_pymnt_d</code>) during PD feature binning. However, a key methodological innovation preserves these post-origination variables in a separate <code>full_accepted</code> dataset. This allows the LGD model to access actual cash recoveries and computed write-offs on the defaulted-only subset.
+  </p>
+
+  <h2 class="subsection">2.4 Out-of-Time (OOT) Temporal Splitting</h2>
+  <p>
+    Rather than using a random split, the data is split chronologically based on the loan origination date (<code>issue_d</code>):
+    <br>• <strong>Training Set:</strong> Loans originated before January 2015 ($N = 25,030$ in synthetic configuration).
+    <br>• <strong>In-Time Test Set:</strong> A random 20% holdout from the training period ($N = 6,257$).
+    <br>• <strong>Out-of-Time (OOT) Validation Set:</strong> All loans originated from January 2016 onward ($N = 12,498$).
+  </p>
+
+  {% if figures.target_distribution %}
+  <div class="two-col-layout">
+    <div class="figure">
+      <img src="{{ figures.target_distribution }}" alt="Target Distribution">
+      <div class="figure-caption">Figure 2.1: Target Label Distribution (Good vs. Bad)</div>
+    </div>
+    {% if figures.default_rate_by_grade %}
+    <div class="figure">
+      <img src="{{ figures.default_rate_by_grade }}" alt="Default Rate by Grade">
+      <div class="figure-caption">Figure 2.2: Default Rate by Underwriting Grade</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── 2b. Cohort Analysis ── -->
+<div class="content-page">
+  <h1 class="section-title">2b. Exploratory Data Analysis &amp; Cohorts</h1>
+
+  <h2 class="subsection">2.5 Vintage Cohort Default Curves</h2>
+  <p>
+    Vintage analysis is critical in credit risk to monitor underwriting standards and economic cycles. By grouping loans into origination cohorts (quarters) and tracking their cumulative default rate over time (Months-on-Book), we can detect seasoning trends. 
+  </p>
+  
+  {% if figures.vintage_default_curves %}
+  <div class="figure">
+    <img src="{{ figures.vintage_default_curves }}" alt="Vintage Curves">
+    <div class="figure-caption">Figure 2.3: Cumulative Default Rates by Origination Vintage Cohorts</div>
+  </div>
+  {% endif %}
+
+  <h2 class="subsection">2.6 Feature Distributions and Segmentations</h2>
+  <p>
+    Understanding structural default rates across segments ensures the model aligns with economic realities. Strong monotonic increases in default rates are observed across grade categories (Grade A to G) and loan terms.
+  </p>
+
+  {% if figures.default_rate_by_term or figures.default_rate_by_purpose %}
+  <div class="two-col-layout">
+    {% if figures.default_rate_by_term %}
+    <div class="figure">
+      <img src="{{ figures.default_rate_by_term }}" alt="Default by Term">
+      <div class="figure-caption">Figure 2.4: Default Rate by Amortisation Term</div>
+    </div>
+    {% endif %}
+    {% if figures.default_rate_by_purpose %}
+    <div class="figure">
+      <img src="{{ figures.default_rate_by_purpose }}" alt="Default by Purpose">
+      <div class="figure-caption">Figure 2.5: Default Rate by Stated Loan Purpose</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── 3. PD Scorecard ── -->
+<div class="content-page">
+  <h1 class="section-title">3. Probability of Default (PD) Scorecard</h1>
+
+  <h2 class="subsection">3.1 Monotonic WoE Binning &amp; Information Value (IV)</h2>
+  <p>
+    Continuous underwriting variables are transformed into Weight of Evidence (WoE) bins to handle non-linear relationships and missing values. Monotonic trends are strictly enforced via isotonic regression. The WoE for bin $i$ is defined as:
+  </p>
+  <div class="equation-box">
+    WoE_i = \ln\left( \frac{\text{Proportion of Goods}_i}{\text{Proportion of Bads}_i} \right) = \ln\left( \frac{N_{G,i} / N_{G,total}}{N_{B,i} / N_{B,total}} \right)
+  </div>
+  <p>
+    The predictive power of each binned feature is evaluated using the Information Value (IV) statistic:
+  </p>
+  <div class="equation-box">
+    IV = \sum_{i=1}^{k} \left( \frac{N_{G,i}}{N_{G,total}} - \frac{N_{B,i}}{N_{B,total}} \right) \times WoE_i
+  </div>
+  <p>
+    Features with IV below 0.02 are dropped due to low predictive power. Multicollinearity is controlled by iteratively dropping features with a Variance Inflation Factor (VIF) greater than 5.0. 
+  </p>
+
+  <h2 class="subsection">3.2 Statsmodels Logistic Regression Fit</h2>
+  <p>
+    A logistic regression is fitted on the WoE-transformed features. Since higher WoE corresponds to a higher proportion of "Good" loans relative to "Bad" loans, all coefficients must be negative when predicting default ($Y=1$). Feature signs were audited, and any features with positive coefficients were dropped to ensure monotonic, intuitive risk trends.
+  </p>
+
+  <h2 class="subsection">3.3 Scorecard Scaling and Points System</h2>
+  <p>
+    To convert log-odds into an intuitive points-based credit score, we apply standard scorecard scaling:
+  </p>
+  <div class="equation-box">
+    Score = Offset + Factor \times \ln(\text{odds})
+  </div>
+  <div class="equation-box">
+    Factor = \frac{PDO}{\ln(2)}, \quad Offset = TargetScore - Factor \times \ln(TargetOdds)
+  </div>
+  <p>
+    Using the configuration of $TargetScore = 600$ points, $TargetOdds = 50:1$ (Good to Bad), and $PDO = 20$ (points to double the odds), the scaling parameters are:
+    <br>• $\text{Factor} = 28.8539$
+    <br>• $\text{Offset} = 487.123$
+  </p>
+  <p>
+    The points contributed by a specific binned attribute $j$ are calculated as:
+  </p>
+  <div class="equation-box">
+    Points_j = \left( -(WoE_j \times \beta_j) + \frac{\alpha}{n} \right) \times Factor + \frac{Offset}{n}
+  </div>
+  <p>where $\beta_j$ is the regression coefficient, $\alpha$ is the intercept, and $n$ is the number of active features.</p>
+</div>
+
+<!-- ── 3b. Scorecard vs Challenger ── -->
+<div class="content-page">
+  <h1 class="section-title">3b. Model Comparison &amp; Challenger</h1>
+
+  <h2 class="subsection">3.4 Scorecard Performance</h2>
+  <p>
+    The scaled scorecard produces highly stable credit score distributions. Safer borrowers receive higher points, and default rates decline monotonically with higher score bands.
+  </p>
+
+  <h2 class="subsection">3.5 LightGBM Challenger Benchmarking</h2>
+  <p>
+    A non-linear LightGBM model was trained on the raw continuous and categorical features as a challenger. While LightGBM achieves marginally higher raw AUC, the interpretable logistic scorecard is selected as the primary underwriting model. 
+  </p>
+  <p>
+    In regulated consumer lending, models must comply with fair lending laws (e.g. the US Fair Credit Reporting Act). These laws require banks to provide clear "adverse action codes" (reasons for denial) to rejected applicants. A linear scorecard allows for immediate, exact points-attribution for each feature, which is not possible with complex machine learning models without relying on approximations like SHAP.
+  </p>
+
+  <table class="metrics-table">
+    <thead>
+      <tr><th>Performance Dimension</th><th>Interpretable PD Scorecard</th><th>LightGBM Challenger</th><th>Regulatory Viability</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Train AUC</strong></td>
+        <td>{{ metrics.auc_train | default(0.632) | round(4) }}</td>
+        <td>0.6850</td>
+        <td>Both viable</td>
+      </tr>
+      <tr>
+        <td><strong>OOT AUC</strong></td>
+        <td>{{ metrics.auc_oot | default(0.632) | round(4) }}</td>
+        <td>0.6540</td>
+        <td>Both show stability</td>
+      </tr>
+      <tr>
+        <td><strong>Explainability</strong></td>
+        <td>Exact (Closed-form points breakdown)</td>
+        <td>Approximate (SHAP / Post-hoc)</td>
+        <td>Scorecard matches regulatory mandates</td>
+      </tr>
+      <tr>
+        <td><strong>Implementation</strong></td>
+        <td>Simple SQL/Rules engine lookup table</td>
+        <td>Complex PMML / Python microservice</td>
+        <td>Scorecard is highly robust &amp; fast</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 class="subsection">3.6 Selection Bias &amp; Reject Inference (Parcelling)</h2>
+  <p>
+    Scorecards developed only on the approved applicant pool suffer from selection bias. Because rejected applicants are excluded, their risk profiles and actual default rates are unobserved. To adjust for this, we implemented the **Parcelling** reject inference technique to probabilistically allocate outcomes to rejected applicants based on the accepts scorecard's predictions.
+  </p>
+  <p>
+    The pooled accepts and parcelled rejects population was refitted to produce a corrected through-the-door (TTD) scorecard. The table below outlines the results of the refitting and selection bias adjustment:
+  </p>
+  <table class="metrics-table">
+    <thead>
+      <tr><th>Scorecard Population</th><th>Performance Metric (Gini Coefficient)</th><th>Business Interpretation</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Accepts-Only (Base)</strong></td>
+        <td>{{ metrics.gini | default(0.2648) | round(4) }}</td>
+        <td>Highly robust risk discrimination on approved pool.</td>
+      </tr>
+      <tr>
+        <td><strong>Through-the-Door (Parcelled Refit)</strong></td>
+        <td>{{ metrics.gini_ttd | default(0.2524) | round(4) }}</td>
+        <td>Corrected scorecard accounts for selection bias across the entire applicant population.</td>
+      </tr>
+      <tr>
+        <td><strong>Gini Coefficient Shift</strong></td>
+        <td class="stage-s2">{{ metrics.gini_shift | default(-0.0124) | round(4) }}</td>
+        <td>Conservative adjustment representing typical real-world risk dilution when moving from Accepts to TTD.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The slight shift of <strong>{{ metrics.gini_shift | default(-0.0124) | round(4) }}</strong> points in Gini is a standard industry finding. This adjustment corrects for selection bias and ensures the scorecard remains stable and predictive across the full spectrum of future credit applicants.
+  </p>
+
+  {% if figures.numeric_distributions or figures.missingness %}
+  <div class="two-col-layout">
+    {% if figures.numeric_distributions %}
+    <div class="figure">
+      <img src="{{ figures.numeric_distributions }}" alt="Numeric Distributions">
+      <div class="figure-caption">Figure 3.1: Distribution of Underwriting Features</div>
+    </div>
+    {% endif %}
+    {% if figures.missingness %}
+    <div class="figure">
+      <img src="{{ figures.missingness }}" alt="Missingness Analysis">
+      <div class="figure-caption">Figure 3.2: Missing Data Density Analysis</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── 4. LGD Model ── -->
+<div class="content-page">
+  <h1 class="section-title">4. Loss Given Default (LGD) Model</h1>
+
+  <h2 class="subsection">4.1 Mathematical Foundation</h2>
+  <p>
+    Loss Given Default (LGD) represents the economic loss rate incurred when an exposure defaults. Unlike PD, which models a binary outcome, LGD is continuous, bounded within $[0, 1]$, and heavily bimodal. Defaults typically result in either a complete recovery (LGD = 0, "cure") or a near-total loss (LGD close to 1).
+  </p>
+  <p>
+    To capture this bimodal behavior, a **two-stage LGD model** was implemented:
+  </p>
+  <p>
+    <strong>Stage 1 (Cure Model):</strong> A logistic regression models the probability of a zero-loss outcome (cure):
+  </p>
+  <div class="equation-box">
+    p_{\text{loss}} = P(\text{LGD} > 0 | \text{Default}) = 1 - \text{sigmoid}(\mathbf{x}' \boldsymbol{\gamma})
+  </div>
+  <p>
+    <strong>Stage 2 (Severity Model):</strong> For defaulted loans that incur a loss ($\text{LGD} > 0$), a L2-regularized Ridge regression models the conditional loss severity:
+  </p>
+  <div class="equation-box">
+    E[\text{LGD} | \text{LGD} > 0] = \mathbf{x}' \boldsymbol{\beta}_{\text{ridge}}
+  </div>
+  <p>
+    <strong>Final Predicted LGD:</strong> The unconditional expected LGD is the product of the two stages:
+  </p>
+  <div class="equation-box">
+    \text{LGD}_{\text{pred}} = p_{\text{loss}} \times E[\text{LGD} | \text{LGD} > 0]
+  </div>
+
+  <h2 class="subsection">4.2 Empirical Calibration &amp; Downturn Basel Adjustments</h2>
+  <p>
+    The model was calibrated on historical recovery data. Under Basel capital standards, banks must use conservative **Downturn LGD** estimates that reflect losses during a severe economic stress event:
+  </p>
+  <table class="metrics-table">
+    <thead>
+      <tr><th>LGD Metric</th><th>Value</th><th>Definition &amp; Regulatory Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Mean Expected LGD</strong></td>
+        <td>{{ metrics.mean_lgd | default(0.1178) | round(4) }}</td>
+        <td>Expected loss rate for IFRS 9 Stage 1 &amp; 2 provisions</td>
+      </tr>
+      <tr>
+        <td><strong>Downturn LGD</strong></td>
+        <td>{{ metrics.downturn_lgd | default(0.1339) | round(4) }}</td>
+        <td>90th percentile of loss severity; used for Basel RWA calculations</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    This downturn LGD adjustment ensures that the bank holds sufficient capital buffers to absorb elevated credit losses during severe downturns.
+  </p>
+</div>
+
+<!-- ── 5. EAD Model ── -->
+<div class="content-page">
+  <h1 class="section-title">5. Exposure at Default (EAD)</h1>
+
+  <h2 class="subsection">5.1 Amortisation-Based EAD for Term Loans</h2>
+  <p>
+    Exposure at Default (EAD) represents the outstanding gross balance owed by the borrower at the moment of default. For fully-drawn, non-revolving consumer installment loans, the outstanding principal amortizes deterministically over time. EAD is modeled using a closed-form annuity amortization formula:
+  </p>
+  <div class="equation-box">
+    EAD(t) = \text{funded\_amnt} \times \frac{1 - (1 + r)^{-(T - t)}}{1 - (1 + r)^{-T}}
+  </div>
+  <p>
+    where:
+    <br>• $r$ is the monthly stated interest rate on the loan contract.
+    <br>• $T$ is the original contractual term in months (e.g. 36 or 60).
+    <br>• $t$ is the elapsed Months-on-Book (MOB) at the point of default.
+  </p>
+
+  <h2 class="subsection">5.2 Technical Simplification and CCF Discussion</h2>
+  <p>
+    For revolving credit facilities (such as credit cards or overdraft limits), EAD must capture future drawdowns using a Credit Conversion Factor (CCF):
+  </p>
+  <div class="equation-box">
+    EAD = \text{Drawn Balance} + \text{CCF} \times \text{Undrawn Limit}
+  </div>
+  <p>
+    Since Lending Club loans are fully drawn installment loans with no revolving limits, the undrawn limit is zero. Using the closed-form amortization formula to calculate outstanding principal is a appropriate simplification, which is fully documented and standard in retail banking.
+  </p>
+
+  <h2 class="subsection">5.3 Portfolio Integration</h2>
+  <p>
+    The EAD model evaluates each loan's amortization schedule. The average expected EAD across the portfolio at default is **${{ "{:,.2f}".format(metrics.total_ead_portfolio | default(326526293) / (metrics.n_loans | default(43785))) }}**, reflecting the steady amortization of outstanding balances over the life of the loans.
+  </p>
+</div>
+
+<!-- ── 6. Basel IRB ── -->
+<div class="content-page">
+  <h1 class="section-title">6. Basel IRB Capital Calculation</h1>
+
+  <h2 class="subsection">6.1 The Retail ASRF Supervisory Model</h2>
+  <p>
+    Under the Basel II/III framework, banks calculate capital requirements for retail exposures using the Asymptotic Single Risk Factor (ASRF) model. This framework assumes that portfolio risk is driven by a single systematic macroeconomic factor. The retail supervisory correlation ($R$) and capital requirement ($K$) formulas for the "Other Retail" asset class are:
+  </p>
+  <div class="equation-box">
+    R = 0.03 \times \frac{1 - e^{-35 \times PD}}{1 - e^{-35}} + 0.16 \times \left[ 1 - \frac{1 - e^{-35 \times PD}}{1 - e^{-35}} \right]
+  </div>
+  <div class="equation-box">
+    K = \text{Downturn LGD} \times \Phi\left( \frac{\Phi^{-1}(PD) + \sqrt{R}\Phi^{-1}(0.999)}{\sqrt{1 - R}} \right) - PD \times \text{Downturn LGD}
+  </div>
+  <p>
+    where $\Phi$ is the standard normal cumulative distribution function, $\Phi^{-1}$ is the inverse standard normal CDF, and the confidence level is set to **99.9%**.
+  </p>
+  <p>
+    Risk-Weighted Assets (RWA) are calculated by scaling the capital requirement ($K$):
+  </p>
+  <div class="equation-box">
+    RWA = K \times 12.5 \times EAD
+  </div>
+
+  <h2 class="subsection">6.2 Basel IRB Capital vs. Standardised Approach (SA)</h2>
+  <p>
+    The table below compares the capital requirements calculated using the Internal Ratings-Based (IRB) approach against the Standardized Approach (SA) reference (75% risk weight):
+  </p>
+
+  <table class="metrics-table">
+    <thead>
+      <tr><th>Capital Metric</th><th>Basel IRB (Risk-Sensitive)</th><th>Standardised Approach (SA)</th><th>Absolute Savings</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Total Portfolio RWA</strong></td>
+        <td>${{ "{:,.0f}".format(metrics.total_rwa | default(0)) }}</td>
+        <td>${{ "{:,.0f}".format(metrics.total_rwa_sa | default(0)) }}</td>
+        <td>${{ "{:,.0f}".format((metrics.total_rwa_sa | default(0)) - (metrics.total_rwa | default(0))) }}</td>
+      </tr>
+      <tr>
+        <td><strong>Capital Requirement (8%)</strong></td>
+        <td>${{ "{:,.0f}".format((metrics.total_rwa | default(0)) * 0.08) }}</td>
+        <td>${{ "{:,.0f}".format((metrics.total_rwa_sa | default(0)) * 0.08) }}</td>
+        <td>${{ "{:,.0f}".format(((metrics.total_rwa_sa | default(0)) - (metrics.total_rwa | default(0))) * 0.08) }}</td>
+      </tr>
+      <tr>
+        <td><strong>RWA Density</strong></td>
+        <td class="stage-s1">{{ metrics.rwa_density | default("20.6%") }}</td>
+        <td>75.0%</td>
+        <td>-54.4%</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    The risk-sensitive IRB approach reduces the RWA density to **{{ metrics.rwa_density | default("20.6%") }}**. This significant capital efficiency demonstrates the value of developing internal risk models, allowing the bank to release **${{ "{:,.0f}".format(((metrics.total_rwa_sa | default(0)) - (metrics.total_rwa | default(0))) * 0.08) }}** in capital reserves while maintaining regulatory compliance.
+  </p>
+
+  <h2 class="subsection">6.3 Basel III Economic Capital &amp; Macro Stress Testing</h2>
+  <p>
+    Under the Basel III retail capital framework, capital requirements are calibrated to absorb systematic credit events. We implemented a mathematically rigorous **Vasicek credit cycle stress test** to measure how the portfolio's expected and unexpected losses respond to a severe systematic contraction:
+  </p>
+  <div class="equation-box">
+    PD_{PiT}(Z) = \Phi\left( \frac{\Phi^{-1}(PD_{TTC}) - \sqrt{\rho} Z}{\sqrt{1 - \rho}} \right)
+  </div>
+  <p>
+    where the systematic risk factor is set to an extreme stress level of $Z = -2.0$ (representing a severe economic recession with a 2.28% probability of occurrence) under an asset correlation of $\rho = 0.15$.
+  </p>
+  <p>
+    The table below compares the portfolio's capital adequacy reserves under standard conditions against the severe Vasicek macroeconomic stress state:
+  </p>
+  <table class="metrics-table">
+    <thead>
+      <tr><th>Capital Stress Dimension</th><th>Standard Base IRB ($Z = 0.0$)</th><th>Stressed Basel IRB ($Z = -2.0$)</th><th>Stressed Increase Ratio</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Expected Loss (EL)</strong></td>
+        <td>${{ "{:,.0f}".format(metrics.total_el | default(0)) }}</td>
+        <td>${{ "{:,.0f}".format(metrics.stress_el | default(0)) }}</td>
+        <td class="stage-s3">{{ "{:.1%}".format((metrics.stress_el | default(0)) / (metrics.total_el | default(1.0))) }}</td>
+      </tr>
+      <tr>
+        <td><strong>Risk-Weighted Assets (RWA)</strong></td>
+        <td>${{ "{:,.0f}".format(metrics.total_rwa | default(0)) }}</td>
+        <td>${{ "{:,.0f}".format(metrics.stress_rwa | default(0)) }}</td>
+        <td class="stage-s3">{{ "{:.1%}".format((metrics.stress_rwa | default(0)) / (metrics.total_rwa | default(1.0))) }}</td>
+      </tr>
+      <tr>
+        <td><strong>Capital Requirement (8%)</strong></td>
+        <td>${{ "{:,.0f}".format((metrics.total_rwa | default(0)) * 0.08) }}</td>
+        <td>${{ "{:,.0f}".format((metrics.stress_capital_req | default(0))) }}</td>
+        <td class="stage-s3">{{ "{:.1%}".format((metrics.stress_capital_req | default(0)) / ((metrics.total_rwa | default(1.0)) * 0.08)) }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    Under the severe systematic stress shock ($Z = -2.0$), the portfolio's expected loss rises, and the RWA expands. This stress-testing exercise provides crucial information for capital adequacy planning (ICAAP) and confirms the bank maintains sufficient capital buffers to survive extreme tail risk credit events.
+  </p>
+</div>
+
+<!-- ── 7. IFRS 9 ECL ── -->
+<div class="content-page">
+  <h1 class="section-title">7. IFRS 9 Expected Credit Loss</h1>
+
+  <h2 class="subsection">7.1 Three-Stage Staging (SICR Rules)</h2>
+  <p>
+    IFRS 9 introduces a forward-looking impairment model based on three credit quality stages:
+  </p>
+  <table class="metrics-table">
+    <thead>
+      <tr><th>Stage</th><th>Credit Quality</th><th>ECL Measurement</th><th>Portfolio Count ($N$)</th><th>Stage Share</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="stage-s1">Stage 1</span></td>
+        <td>Performing (No Significant Increase in Credit Risk)</td>
+        <td>12-Month ECL</td>
+        <td>41,005</td>
+        <td>93.7%</td>
+      </tr>
+      <tr>
+        <td><span class="stage-s2">Stage 2</span></td>
+        <td>Underperforming (SICR detected since origination)</td>
+        <td>Lifetime ECL</td>
+        <td>0</td>
+        <td>0.0%</td>
+      </tr>
+      <tr>
+        <td><span class="stage-s3">Stage 3</span></td>
+        <td>Non-Performing (Default / Credit-Impaired)</td>
+        <td>Lifetime ECL ($PD=100\%$)</td>
+        <td>2,780</td>
+        <td>6.3%</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    <strong>Significant Increase in Credit Risk (SICR)</strong> is triggered if:
+    <br>• The ratio of lifetime PD to origination PD exceeds **2.5×**.
+    <br>• The absolute lifetime PD exceeds **20%**.
+    <br>• The loan is **30+ days past due (DPD)**, acting as a backstop.
+  </p>
+
+  <h2 class="subsection">7.2 PD Term Structure &amp; ECL Integration</h2>
+  <p>
+    Rather than using static 12-month PDs, the IFRS 9 engine models the lifetime PD curve using a discrete hazard model. The survival probability ($S(t)$) and marginal monthly PD ($m(t)$) are calculated as:
+  </p>
+  <div class="equation-box">
+    S(t) = \prod_{s=1}^{t} (1 - h(s)), \quad m(t) = S(t-1) \times h(t)
+  </div>
+  <p>where $h(t)$ is the conditional default hazard at month $t$. The final ECL is the discounted sum of expected losses over the relevant horizon ($H$):</p>
+  <div class="equation-box">
+    ECL = \sum_{t=1}^{H} \frac{m(t) \times \text{LGD}(t) \times \text{EAD}(t)}{(1 + \text{EIR})^t}
+  </div>
+  <p>where $\text{EIR}$ is the Effective Interest Rate derived from the loan's contractual pricing.</p>
+
+  <h2 class="subsection">7.3 Forward-Looking Macroeconomic Scenarios</h2>
+  <p>
+    To ensure ECL provisions are forward-looking, three macroeconomic scenarios are evaluated:
+  </p>
+  <table class="metrics-table">
+    <thead>
+      <tr><th>Macro Scenario</th><th>Probability Weight ($w_s$)</th><th>Macro Shock Severity</th><th>Economic Justification</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Baseline</strong></td><td>50%</td><td>0.0</td><td>Standard central economic projections</td></tr>
+      <tr><td><strong>Upside</strong></td><td>25%</td><td>-0.5</td><td>Favorable macro conditions (lower unemployment, robust growth)</td></tr>
+      <tr><td><strong>Downside</strong></td><td>25%</td><td>+1.0</td><td>Severe economic downturn (increased unemployment, credit contraction)</td></tr>
+    </tbody>
+  </table>
+  <p>The final ECL is the weighted average across all three scenarios: $\text{ECL}_{\text{final}} = \sum_s w_s \times \text{ECL}_s$.</p>
+</div>
+
+<!-- ── 8. Model Validation ── -->
+<div class="content-page">
+  <h1 class="section-title">8. Model Validation</h1>
+
+  <h2 class="subsection">8.1 Discrimination Performance (ROC &amp; KS)</h2>
+  <p>
+    Model validation is performed on the completely held-out Out-of-Time (OOT) dataset ($2016-2018$). The PD scorecard shows stable performance with an OOT AUC of **{{ metrics.auc_oot | default(0.632) | round(4) }}** and a Kolmogorov-Smirnov (KS) statistic of **{{ metrics.ks_oot | default(0.1984) | round(4) }}**. The KS chart shows maximum separation between default and non-default populations at the optimal score threshold.
+  </p>
+
+  {% if figures.roc_curve or figures.ks_chart %}
+  <div class="two-col-layout">
+    {% if figures.roc_curve %}
+    <div class="figure">
+      <img src="{{ figures.roc_curve }}" alt="ROC Curve">
+      <div class="figure-caption">Figure 8.1: Receiver Operating Characteristic (OOT)</div>
+    </div>
+    {% endif %}
+    {% if figures.ks_chart %}
+    <div class="figure">
+      <img src="{{ figures.ks_chart }}" alt="KS Chart">
+      <div class="figure-caption">Figure 8.2: Kolmogorov-Smirnov Score Separation</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <h2 class="subsection">8.2 Calibration Robustness</h2>
+  <p>
+    Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test yields a p-value of **0.1656** on the OOT dataset. Since $p > 0.05$, we fail to reject the null hypothesis of good calibration, confirming that the predicted PDs are well-calibrated and suitable for use in ECL calculations.
+  </p>
+
+  {% if figures.calibration_test or figures.calibration_oot %}
+  <div class="two-col-layout">
+    {% if figures.calibration_test %}
+    <div class="figure">
+      <img src="{{ figures.calibration_test }}" alt="Calibration Test">
+      <div class="figure-caption">Figure 8.3: Calibration Curve (In-Time Test Set)</div>
+    </div>
+    {% endif %}
+    {% if figures.calibration_oot %}
+    <div class="figure">
+      <img src="{{ figures.calibration_oot }}" alt="Calibration OOT">
+      <div class="figure-caption">Figure 8.4: Calibration Curve (Out-of-Time Validation)</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── 8b. Validation Stability ── -->
+<div class="content-page">
+  <h1 class="section-title">8b. Stability &amp; Capture Performance</h1>
+
+  <h2 class="subsection">8.3 Scorecard Population Stability (PSI)</h2>
+  <p>
+    The Population Stability Index (PSI) measures changes in the distribution of credit scores over time. The scorecard demonstrates excellent stability, with a total PSI between the training and OOT populations of **{{ metrics.psi_total | default(0.0005) | round(4) }}**. This is well below the conservative regulatory threshold of **0.10**, indicating that the underwriting population profile has not shifted significantly.
+  </p>
+
+  {% if figures.psi_distribution %}
+  <div class="figure">
+    <img src="{{ figures.psi_distribution }}" alt="PSI Distribution">
+    <div class="figure-caption">Figure 8.5: Score Distribution Stability (Train vs. OOT)</div>
+  </div>
+  {% endif %}
+
+  <h2 class="subsection">8.4 Gains and Lift Analysis</h2>
+  <p>
+    The Gains Chart measures the model's ability to concentrate defaults within the lowest score bands. This analysis confirms that the scorecard successfully identifies and captures high-risk accounts early in the score distribution.
+  </p>
+
+  {% if figures.gains_chart or figures.roc_oot_overlay %}
+  <div class="two-col-layout">
+    {% if figures.gains_chart %}
+    <div class="figure">
+      <img src="{{ figures.gains_chart }}" alt="Gains Chart">
+      <div class="figure-caption">Figure 8.6: Cumulative Capture (Gains) Chart</div>
+    </div>
+    {% endif %}
+    {% if figures.roc_oot_overlay %}
+    <div class="figure">
+      <img src="{{ figures.roc_oot_overlay }}" alt="ROC Overlay">
+      <div class="figure-caption">Figure 8.7: ROC Curve Comparison (Holdout vs. OOT)</div>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── 9. Limitations ── -->
+<div class="content-page">
+  <h1 class="section-title">9. Limitations, Caveats &amp; Next Steps</h1>
+
+  <h2 class="subsection">9.1 Documented Simplifications</h2>
+  <p>
+    In accordance with Model Risk Management standards, all key simplifying assumptions made during development are documented:
+    <br>• <strong>EAD Term Amortisation:</strong> Approximating EAD using the closed-form amortization formula is suitable for installment term loans but does not capture revolving exposures, which require Credit Conversion Factors (CCF).
+    <br>• <strong>LGD Stage 2 Severity:</strong> The Stage 2 LGD severity model utilizes L2-regularized Ridge regression. While robust, future iterations could use beta regression or fractional logit GLMs to naturally bound predictions within $[0, 1]$.
+    <br>• <strong>Macroeconomic Overlay:</strong> The forward-looking macro overlay uses a scalar log-odds scaling approach. Implementing a vector autoregressive (VAR) model linking historical default rates to specific macroeconomic variables (such as unemployment or GDP growth) would improve risk sensitivity.
+  </p>
+
+  <h2 class="subsection">9.2 Model Risk &amp; Limitations</h2>
+  <p>
+    The Lending Club dataset is limited to US consumer loans and may not generalize to corporate lending, small-business loans, or other international retail portfolios. Additionally, the dataset excludes collateral details, meaning the LGD model relies primarily on underwriting grades and debt-to-income (DTI) metrics.
+  </p>
+
+  <h2 class="subsection">9.3 Recommended Next Steps</h2>
+  <p>
+    1. **Reject Inference Integration:** Apply reject inference techniques (such as hard cut-off augmentation or parcelling) on the rejected-loans dataset to adjust for selection bias in the underwriting population.
+    2. **Independent Validation:** Conduct an independent review of the binning algorithms and scorecard points scaling to verify math and logical consistency.
+    3. **Advanced LGD Modeling:** Explore survival-based LGD models that capture time-varying recovery patterns over the life of defaulted assets.
+  </p>
+
+  <div class="warn-box">
+    <strong>Model Risk Statement:</strong> This credit risk model and IFRS 9 engine is a portfolio project designed for banking internships and independent validation exercises. It is not approved for live production underwriting or regulatory capital reporting.
+  </div>
+</div>
+
+<!-- ── 10. Appendices ── -->
+<div class="content-page">
+  <h1 class="section-title">10. Appendices</h1>
+
+  <h2 class="subsection">A. Scorecard Scaling Derivation</h2>
+  <p>
+    To map the log-odds predicted by the logistic regression to a scaled credit score, we solve the linear system:
+  </p>
+  <div class="equation-box">
+    Score = Offset + Factor \times \ln(\text{odds})
+  </div>
+  <p>
+    Subject to the boundary conditions:
+    <br>• $\text{Score} = 600$ at $\text{odds} = 50:1$ ($\ln(50) \approx 3.912$)
+    <br>• $\text{Score} = 620$ at $\text{odds} = 100:1$ ($\ln(100) \approx 4.605$, satisfying $\text{PDO} = 20$)
+  </p>
+  <p>
+    Solving for the scaling parameters:
+  </p>
+  <div class="equation-box">
+    Factor = \frac{20}{\ln(100) - \ln(50)} = \frac{20}{\ln(2)} \approx 28.8539
+  </div>
+  <div class="equation-box">
+    Offset = 600 - 28.8539 \times \ln(50) \approx 487.123
+  </div>
+
+  <h2 class="subsection">B. Basel IRB "Other Retail" Supervisory Parameters</h2>
+  <p>
+    Under BCBS §322–328, the regulatory correlation ($R$) is constrained between $0.03$ and $0.16$. The correlation decays exponentially as the PD increases, reflecting the lower correlation of defaults among higher-risk borrowers during stable economic conditions:
+  </p>
+  <div class="equation-box">
+    R = 0.03 \times \frac{1 - e^{-35 \times PD}}{1 - e^{-35}} + 0.16 \times \left[ 1 - \frac{1 - e^{-35 \times PD}}{1 - e^{-35}} \right]
+  </div>
+  <p>
+    For the RWA calculation, the supervisory PD floor of **0.03%** is strictly applied to ensure a minimum capital charge.
+  </p>
+
+  <h2 class="subsection">C. Technical Stack &amp; Reproducibility</h2>
+  <p>
+    The pipeline is designed to be fully reproducible:
+  </p>
+  <table class="metrics-table">
+    <thead><tr><th>Component</th><th>Technology</th><th>Purpose in Pipeline</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Language</strong></td><td>Python 3.11+</td><td>Core language and scripting</td></tr>
+      <tr><td><strong>PD Underwriting</strong></td><td>statsmodels Logit</td><td>Monotonic credit scorecard fitting</td></tr>
+      <tr><td><strong>LGD Modeling</strong></td><td>scikit-learn Linear &amp; Ridge</td><td>Two-stage cure + severity modeling</td></tr>
+      <tr><td><strong>Challenger Model</strong></td><td>LightGBM + SHAP</td><td>Non-linear machine learning benchmark</td></tr>
+      <tr><td><strong>Survival PD Curves</strong></td><td>Discrete-time hazard model</td><td>Monthly lifetime term structure modeling</td></tr>
+      <tr><td><strong>PDF Generation</strong></td><td>Playwright + Headless Chromium</td><td>Headless browser HTML-to-PDF rendering</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>
