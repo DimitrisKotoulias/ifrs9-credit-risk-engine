@@ -171,7 +171,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     # ── Phase 3 extras: bootstrap CIs, Spiegelhalter, Platt choice, CSI ────────
     try:
         from credit_risk.validation.discrimination import bootstrap_auc_ci  # noqa: PLC0415
-        from credit_risk.validation.calibration import fit_platt_calibrator, spiegelhalter_test, compute_calibration_intercept_slope, compute_calibration  # noqa: PLC0415
+        from credit_risk.validation.calibration import spiegelhalter_test, compute_calibration_intercept_slope, compute_calibration  # noqa: PLC0415
         from credit_risk.validation.stability import compute_csi as _compute_csi  # noqa: PLC0415
         from sklearn.metrics import brier_score_loss  # noqa: PLC0415
 
@@ -195,35 +195,16 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         val_metrics["calibration"]["test"]["spiegelhalter"] = spiegelhalter_test(y_test.values, _pd_test_arr)
         val_metrics["calibration"]["oot"]["spiegelhalter"] = spiegelhalter_test(y_oot.values, _pd_oot_arr)
 
-        # Platt vs isotonic calibration choice
-        platt_cal = fit_platt_calibrator(y_train.values, _pd_train_arr)
-        pd_test_platt = platt_cal.predict_proba(_pd_test_arr.reshape(-1, 1))[:, 1]
-        brier_platt = float(brier_score_loss(y_test.values, pd_test_platt))
-        if calibrator is not None:
-            pd_test_iso = np.clip(calibrator.transform(_pd_test_arr), 1e-8, 1 - 1e-8)
-            brier_iso = float(brier_score_loss(y_test.values, pd_test_iso))
-        else:
-            brier_iso = float(brier_score_loss(y_test.values, _pd_test_arr))
-        
-        if brier_platt <= brier_iso:
-            scorecard.set_calibrator(platt_cal)
-            val_metrics["calibration"]["method_chosen"] = "platt"
-            pd_oot_calibrated = platt_cal.predict_proba(_pd_oot_arr.reshape(-1, 1))[:, 1]
-        elif calibrator is not None:
-            scorecard.set_calibrator(calibrator)
-            val_metrics["calibration"]["method_chosen"] = "isotonic"
-            pd_oot_calibrated = np.clip(calibrator.transform(_pd_oot_arr), 1e-8, 1 - 1e-8)
-        else:
-            # Neither candidate is attached: the isotonic branch only exists when the
-            # in-time test HL test rejected, and Platt did not beat the raw PDs. Record
-            # "none" so metrics.json cannot claim a method that was never deployed
-            # (docs/AUDIT.md finding A19).
-            val_metrics["calibration"]["method_chosen"] = "none"
-            pd_oot_calibrated = _pd_oot_arr
-            
-        logger.info(
-            "Calibration choice: %s (platt_brier=%.4f, iso_brier=%.4f)",
-            val_metrics["calibration"]["method_chosen"], brier_platt, brier_iso,
+        # The recalibration decision belongs to the out-of-time gate in run_validation:
+        # it triggers on OOT evidence, fits on the earlier OOT slice and accepts only on
+        # demonstrated improvement on the later one. The previous shootout here fitted
+        # Platt on TRAIN and scored it against raw PDs on TEST -- the wrong evidence for
+        # an out-of-time drift -- and could attach a transform the gate had rejected
+        # (docs/AUDIT.md finding A1).
+        # (the calibrator, if the gate accepted one, is already attached above)
+        _gate = val_metrics["calibration"].get("recalibration_gate", {})
+        val_metrics["calibration"]["method_chosen"] = (
+            _gate.get("chosen_method", "none") if calibrator is not None else "none"
         )
 
         # After recalibration stats
@@ -913,6 +894,11 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         k: float(v) for k, v in macro_shocks.get("elasticities_adjusted", {}).items()
     }
     metrics["macro_sign_adjusted"] = bool(macro_shocks.get("macro_sign_adjusted", False))
+    # Axes on which the upside and downside scenarios coincide (should always be empty;
+    # qa_checks.check_scenario_axes_separate fails the build otherwise).
+    metrics["degenerate_scenario_axes"] = list(
+        macro_shocks.get("degenerate_scenario_axes", [])
+    )
     metrics["macro_unrate_lag"] = int(macro_shocks.get("macro_unrate_lag", 0))
     metrics["macro_r_squared"] = float(macro_shocks.get("r_squared", float("nan")))
     metrics["macro_predictions"] = {

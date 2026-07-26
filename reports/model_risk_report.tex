@@ -81,12 +81,12 @@ loan portfolio (2,260,701 accepted loans, of which 1,369,566 have a resolved
 good/bad outcome and 992,661 form the modelling population after the train/OOT grey
 zone is excluded; 27,648,741 rejected applications).
 The Probability of Default (PD) scorecard achieves an out-of-time Gini of
-\textbf{0.3977} (AUC = 0.6989), with Population Stability
+\textbf{0.3977} (AUC = 0.6988), with Population Stability
 Index PSI = 0.0030 (model stability: GREEN).
 The two-stage Loss Given Default model yields mean LGD = 0.8931
 and downturn LGD = 1.0000 (90th percentile, Basel-conservative).
-Basel IRB Risk-Weighted Assets total \$19,585,499,179 at 207.5\% RWA density.
-IFRS 9 Expected Credit Loss provisions total \$2,371,560,537 (coverage: 25.130\%).
+Basel IRB Risk-Weighted Assets total \$21,592,289,075 at 228.8\% RWA density.
+IFRS 9 Expected Credit Loss provisions total \$2,387,796,567 (coverage: 25.302\%).
 \end{abstract}
 
 \tableofcontents
@@ -123,8 +123,8 @@ Table~\ref{tab:exec_summary} summarizes the portfolio-level credit metrics and v
 \textbf{Quant Dimension} & \textbf{Metric Value} & \textbf{Regulatory Purpose \& Benchmark} \\
 \midrule
 PD Discrimination (OOT) & 0.3977 Gini & Out-of-Time score risk rank-ordering capability. \\
-& (0.6989 AUC) & Matches regulatory standards for acceptable discrimination. \\
-OOT Separation (KS) & 0.2873 & Kolmogorov-Smirnov statistic; values above $\sim 0.30$ are typical for retail scorecards. \\
+& (0.6988 AUC) & Matches regulatory standards for acceptable discrimination. \\
+OOT Separation (KS) & 0.2872 & Kolmogorov-Smirnov statistic; values above $\sim 0.30$ are typical for retail scorecards. \\
 OOT Calibration Brier & 0.1784 & Brier score reflecting high probability accuracy. \\
 OOT Calibration p-value (raw, pre-recalib.) & 0.0000 & Hosmer-Lemeshow $p$-value on the \textbf{raw} scorecard PD ($p > 0.05$ confirms good calibration); see Table~\ref{tab:calibration_comparison} for the post-recalibration before/after comparison. \\
 OOT Population Stability & 0.0030 & PSI Train-to-OOT ($< 0.10$ denotes absolute population stability). \\
@@ -132,22 +132,22 @@ OOT Population Stability & 0.0030 & PSI Train-to-OOT ($< 0.10$ denotes absolute 
 LGD Model Summary & 0.8931 Mean LGD & Primary provisioning loss rate. \\
 & 1.0000 Downturn & Conservative 90th percentile stress limit for capital charge. \\
 \midrule
-Expected Loss (EL) & \$1,632,451,860 & Lifetime Expected Loss projection of current portfolio. \\
-Portfolio EL Rate & 17.30\% & Underwriting expected loss density. \\
+Expected Loss (EL) & \$2,316,616,242 & Lifetime Expected Loss projection of current portfolio. \\
+Portfolio EL Rate & 24.55\% & Underwriting expected loss density. \\
 \midrule
-Basel IRB Total RWA & \$19,585,499,179 & Risk-Weighted Assets calculated using retail ASRF formula. \\
+Basel IRB Total RWA & \$21,592,289,075 & Risk-Weighted Assets calculated using retail ASRF formula. \\
 Basel SA Total RWA & \$7,077,949,899 & Standardised Approach baseline capital RWA reference (75\% RW). \\
-Basel RWA Density & 207.5\% & IRB RWA divided by total portfolio EAD (\$9,437,266,531). \\
+Basel RWA Density & 228.8\% & IRB RWA divided by total portfolio EAD (\$9,437,266,531). \\
 \midrule
-Portfolio IFRS 9 ECL & \$2,371,560,537 & Probability-weighted Stage 1, 2, \& 3 Expected Credit Loss. \\
-Portfolio ECL Coverage & 25.130\% & Capital coverage buffer (Total ECL / Total EAD). \\
+Portfolio IFRS 9 ECL & \$2,387,796,567 & Probability-weighted Stage 1, 2, \& 3 Expected Credit Loss. \\
+Portfolio ECL Coverage & 25.302\% & Capital coverage buffer (Total ECL / Total EAD). \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-An OOT AUC of 0.6989 (Gini 0.3977) is the realistic discrimination ceiling for an application scorecard built on origination-only features on LendingClub-style unsecured consumer data: $0.30 - 0.45$ is the published Gini range for consumer-credit scorecards surveyed by \textcite{lessmann2015benchmarking}, while the tree challengers reach 0.7030 on the same features, indicating the scorecard sits modestly below the attainable ceiling rather than at it. The figure should be read as realistic, benchmarked performance rather than a shortfall.
+An OOT AUC of 0.6988 (Gini 0.3977) is the realistic discrimination ceiling for an application scorecard built on origination-only features on LendingClub-style unsecured consumer data: $0.30 - 0.45$ is the published Gini range for consumer-credit scorecards surveyed by \textcite{lessmann2015benchmarking}, while the tree challengers reach 0.7030 on the same features, indicating the scorecard sits modestly below the attainable ceiling rather than at it. The figure should be read as realistic, benchmarked performance rather than a shortfall.
 
-The scorecard demonstrates stable, high-contrast risk separation across distinct macroeconomic cycles. Under Basel capital standards, the risk-sensitive Internal Ratings-Based (IRB) approach identifies a capital requirement of \textbf{\$1,566,839,934} compared to \textbf{\$566,235,992} under the Standardised Approach. This capital surcharge of \textbf{\$1,000,603,942} reflects the elevated risk profile (PD/LGD) of the LendingClub consumer portfolio, demonstrating that a flat 75\% risk weight under the Standardised Approach materially undercapitalises this retail asset class.
+The scorecard demonstrates stable, high-contrast risk separation across distinct macroeconomic cycles. Under Basel capital standards, the risk-sensitive Internal Ratings-Based (IRB) approach identifies a capital requirement of \textbf{\$1,727,383,126} compared to \textbf{\$566,235,992} under the Standardised Approach. This capital surcharge of \textbf{\$1,161,147,134} reflects the elevated risk profile (PD/LGD) of the LendingClub consumer portfolio, demonstrating that a flat 75\% risk weight under the Standardised Approach materially undercapitalises this retail asset class.
 
 This risk-sensitive capital surcharge highlights the necessity of developing internal ratings-based (IRB) risk frameworks \parencite{bcbs2004} to ensure adequate capital provisioning for higher-yielding, higher-risk retail credit assets rather than relying on rigid, risk-insensitive standardized approaches.
 
@@ -336,21 +336,21 @@ The following table presents the logistic regression coefficient estimates, stan
 \textbf{Feature} & \textbf{Coefficient} & \textbf{Std.\ Error} & \textbf{z-stat} & \textbf{p-value} \\
 \midrule
 \texttt{const} & -1.5818 & 0.0047 & -335.033 & 0.0000$^{***}$ \\
-\texttt{grade\_enc} & -0.5388 & 0.0105 & -51.270 & 0.0000$^{***}$ \\
-\texttt{term\_enc} & -0.6362 & 0.0125 & -50.845 & 0.0000$^{***}$ \\
-\texttt{loan\_to\_income} & -0.4239 & 0.0157 & -26.916 & 0.0000$^{***}$ \\
-\texttt{fico\_range\_high} & -0.2745 & 0.0192 & -14.298 & 0.0000$^{***}$ \\
-\texttt{revol\_util\_x\_open\_acc} & -0.1368 & 0.0235 & -5.826 & 0.0000$^{***}$ \\
-\texttt{new\_accounts\_ratio} & -0.4349 & 0.0264 & -16.475 & 0.0000$^{***}$ \\
-\texttt{dti} & -0.3092 & 0.0223 & -13.858 & 0.0000$^{***}$ \\
-\texttt{bc\_open\_to\_buy} & -0.2276 & 0.0259 & -8.799 & 0.0000$^{***}$ \\
-\texttt{num\_tl\_op\_past\_12m} & -0.1226 & 0.0296 & -4.136 & 0.0000$^{***}$ \\
+\texttt{grade\_enc} & -0.5388 & 0.0105 & -51.266 & 0.0000$^{***}$ \\
+\texttt{term\_enc} & -0.6364 & 0.0125 & -50.855 & 0.0000$^{***}$ \\
+\texttt{loan\_to\_income} & -0.4237 & 0.0158 & -26.897 & 0.0000$^{***}$ \\
+\texttt{fico\_range\_high} & -0.2744 & 0.0192 & -14.291 & 0.0000$^{***}$ \\
+\texttt{revol\_util\_x\_open\_acc} & -0.1372 & 0.0235 & -5.841 & 0.0000$^{***}$ \\
+\texttt{new\_accounts\_ratio} & -0.4344 & 0.0264 & -16.456 & 0.0000$^{***}$ \\
+\texttt{dti} & -0.3090 & 0.0223 & -13.851 & 0.0000$^{***}$ \\
+\texttt{bc\_open\_to\_buy} & -0.2275 & 0.0259 & -8.794 & 0.0000$^{***}$ \\
+\texttt{num\_tl\_op\_past\_12m} & -0.1228 & 0.0296 & -4.141 & 0.0000$^{***}$ \\
 \texttt{avg\_cur\_bal} & -0.3563 & 0.0315 & -11.306 & 0.0000$^{***}$ \\
-\texttt{annual\_inc} & -0.5534 & 0.0321 & -17.222 & 0.0000$^{***}$ \\
-\texttt{inq\_last\_6mths\_per\_month} & -0.5423 & 0.0305 & -17.808 & 0.0000$^{***}$ \\
-\texttt{mths\_since\_recent\_bc} & -0.2483 & 0.0356 & -6.972 & 0.0000$^{***}$ \\
-\texttt{num\_rev\_tl\_bal\_gt\_0} & -0.0779 & 0.0353 & -2.204 & 0.0275$^{**}$ \\
-\texttt{mort\_acc} & -0.2171 & 0.0407 & -5.336 & 0.0000$^{***}$ \\
+\texttt{annual\_inc} & -0.5545 & 0.0321 & -17.250 & 0.0000$^{***}$ \\
+\texttt{inq\_last\_6mths\_per\_month} & -0.5424 & 0.0305 & -17.810 & 0.0000$^{***}$ \\
+\texttt{mths\_since\_recent\_bc} & -0.2482 & 0.0356 & -6.970 & 0.0000$^{***}$ \\
+\texttt{num\_rev\_tl\_bal\_gt\_0} & -0.0781 & 0.0354 & -2.210 & 0.0271$^{**}$ \\
+\texttt{mort\_acc} & -0.2170 & 0.0407 & -5.333 & 0.0000$^{***}$ \\
 \midrule
 \multicolumn{5}{l}{\footnotesize Significance: $^{***}p<0.01$, $^{**}p<0.05$, $^{*}p<0.10$} \\
 \bottomrule
@@ -377,33 +377,33 @@ Each WoE bin is converted to credit score points using the scaling formula. High
 \texttt{} & [4.50, inf) & -0.9212 & -0.5388 & 39,958 & 34.12\% & 15.1 \\
 \texttt{} & Special & 0.0000 & -0.5388 & 0 & 0.00\% & 29.4 \\
 \texttt{} & Missing & 0.0000 & -0.5388 & 0 & 0.00\% & 29.4 \\
-\texttt{term\_enc} & (-inf, 48.00) & 0.3076 & -0.6362 & 270,363 & 13.16\% & 35.1 \\
-\texttt{} & [48.00, inf) & -0.6604 & -0.6362 & 92,954 & 28.52\% & 17.3 \\
-\texttt{} & Special & 0.0000 & -0.6362 & 0 & 0.00\% & 29.4 \\
-\texttt{} & Missing & 0.0000 & -0.6362 & 0 & 0.00\% & 29.4 \\
-\texttt{loan\_to\_income} & (-inf, 0.06) & 0.5537 & -0.4239 & 23,701 & 10.59\% & 36.2 \\
-\texttt{} & [0.06, 0.10) & 0.4494 & -0.4239 & 31,272 & 11.62\% & 34.9 \\
-\texttt{} & [0.10, 0.13) & 0.3716 & -0.4239 & 37,013 & 12.45\% & 34.0 \\
-\texttt{} & [0.13, 0.16) & 0.2960 & -0.4239 & 30,065 & 13.29\% & 33.1 \\
-\texttt{} & [0.16, 0.19) & 0.2007 & -0.4239 & 47,117 & 14.43\% & 31.9 \\
-\texttt{} & [0.19, 0.25) & 0.0475 & -0.4239 & 59,488 & 16.43\% & 30.0 \\
-\texttt{} & [0.25, 0.29) & -0.1475 & -0.4239 & 43,825 & 19.28\% & 27.6 \\
-\texttt{} & [0.29, 0.35) & -0.3341 & -0.4239 & 38,671 & 22.36\% & 25.3 \\
-\texttt{} & [0.35, 0.40) & -0.4938 & -0.4239 & 23,858 & 25.25\% & 23.4 \\
-\texttt{} & [0.40, inf) & -0.5864 & -0.4239 & 28,307 & 27.04\% & 22.3 \\
-\texttt{} & Special & 0.0000 & -0.4239 & 0 & 0.00\% & 29.4 \\
-\texttt{} & Missing & 0.0000 & -0.4239 & 0 & 0.00\% & 29.4 \\
-\texttt{fico\_range\_high} & (-inf, 666.50) & -0.3676 & -0.2745 & 29,804 & 22.94\% & 26.5 \\
-\texttt{} & [666.50, 676.50) & -0.2966 & -0.2745 & 60,759 & 21.71\% & 27.1 \\
+\texttt{term\_enc} & (-inf, 48.00) & 0.3076 & -0.6364 & 270,363 & 13.16\% & 35.1 \\
+\texttt{} & [48.00, inf) & -0.6604 & -0.6364 & 92,954 & 28.52\% & 17.3 \\
+\texttt{} & Special & 0.0000 & -0.6364 & 0 & 0.00\% & 29.4 \\
+\texttt{} & Missing & 0.0000 & -0.6364 & 0 & 0.00\% & 29.4 \\
+\texttt{loan\_to\_income} & (-inf, 0.06) & 0.5537 & -0.4237 & 23,701 & 10.59\% & 36.2 \\
+\texttt{} & [0.06, 0.10) & 0.4494 & -0.4237 & 31,272 & 11.62\% & 34.9 \\
+\texttt{} & [0.10, 0.13) & 0.3716 & -0.4237 & 37,013 & 12.45\% & 34.0 \\
+\texttt{} & [0.13, 0.16) & 0.2960 & -0.4237 & 30,065 & 13.29\% & 33.1 \\
+\texttt{} & [0.16, 0.19) & 0.2007 & -0.4237 & 47,117 & 14.43\% & 31.9 \\
+\texttt{} & [0.19, 0.25) & 0.0475 & -0.4237 & 59,488 & 16.43\% & 30.0 \\
+\texttt{} & [0.25, 0.29) & -0.1475 & -0.4237 & 43,825 & 19.28\% & 27.6 \\
+\texttt{} & [0.29, 0.35) & -0.3341 & -0.4237 & 38,671 & 22.36\% & 25.3 \\
+\texttt{} & [0.35, 0.40) & -0.4938 & -0.4237 & 23,858 & 25.25\% & 23.4 \\
+\texttt{} & [0.40, inf) & -0.5864 & -0.4237 & 28,307 & 27.04\% & 22.3 \\
+\texttt{} & Special & 0.0000 & -0.4237 & 0 & 0.00\% & 29.4 \\
+\texttt{} & Missing & 0.0000 & -0.4237 & 0 & 0.00\% & 29.4 \\
+\texttt{fico\_range\_high} & (-inf, 666.50) & -0.3676 & -0.2744 & 29,804 & 22.94\% & 26.5 \\
+\texttt{} & [666.50, 676.50) & -0.2966 & -0.2744 & 60,759 & 21.71\% & 27.1 \\
 \bottomrule
 \multicolumn{7}{l}{\footnotesize WoE = ln(\%Good/\%Bad); Points = ($-\text{WoE}_j * \beta_j + \alpha/n$) * Factor + Offset/n} \\
 \end{tabular}
 \end{table}
 
 \subsection{Interpretability vs.\ Performance: Challenger Model Benchmark}
-A non-linear LightGBM model was trained as a challenger \parencite{baesens2016} on the scorecard's selected predictors (see Section~7.8 for the exact feature count actually consumed by each model). Although gradient boosting is competitive in-sample, on the out-of-time set the LightGBM challenger \emph{exceeds} the scorecard's discrimination (OOT AUC 0.7030 vs 0.6989), a gap tested in Section~7.8. The scorecard is nonetheless retained as the production model for regulatory and explainability reasons set out below, with the discrimination sacrifice reported rather than obscured. Regulatory standards (such as the US Fair Credit Reporting Act) require financial institutions to provide clear ``adverse action codes'' (reasons for denial) to rejected applicants. A linear scorecard allows for immediate, exact points-attribution for each feature, which is not possible with complex machine learning models without relying on approximations like SHAP.
+A non-linear LightGBM model was trained as a challenger \parencite{baesens2016} on the scorecard's selected predictors (see Section~7.8 for the exact feature count actually consumed by each model). Although gradient boosting is competitive in-sample, on the out-of-time set the LightGBM challenger \emph{exceeds} the scorecard's discrimination (OOT AUC 0.7030 vs 0.6988), a gap tested in Section~7.8. The scorecard is nonetheless retained as the production model for regulatory and explainability reasons set out below, with the discrimination sacrifice reported rather than obscured. Regulatory standards (such as the US Fair Credit Reporting Act) require financial institutions to provide clear ``adverse action codes'' (reasons for denial) to rejected applicants. A linear scorecard allows for immediate, exact points-attribution for each feature, which is not possible with complex machine learning models without relying on approximations like SHAP.
 
-To address potential policy-decision circularity from using LendingClub's own underwriting variables (\texttt{int\_rate} and \texttt{grade}), we developed a secondary Pure Underwriting Scorecard (Model B) that completely excludes these fields and relies solely on applicant credit bureau and demographic variables. Table~\ref{tab:underwriting_comparison} compares the performance of the full scorecard (Model A) against this independent underwriting model. While Model A is the designated pipeline champion due to its superior discrimination, it utilizes LendingClub's pricing variables which are themselves highly correlated risk assessments. This introduces a degree of decision circularity. Model B (Pure Underwriting Scorecard) shows that a model built solely on raw credit bureau and demographic features remains competitive (OOT AUC = 0.6821 vs Model A's 0.6989, both as reported in Table~\ref{tab:underwriting_comparison}), supporting the scorecard's viability in an independent bank underwriting environment.
+To address potential policy-decision circularity from using LendingClub's own underwriting variables (\texttt{int\_rate} and \texttt{grade}), we developed a secondary Pure Underwriting Scorecard (Model B) that completely excludes these fields and relies solely on applicant credit bureau and demographic variables. Table~\ref{tab:underwriting_comparison} compares the performance of the full scorecard (Model A) against this independent underwriting model. While Model A is the designated pipeline champion due to its superior discrimination, it utilizes LendingClub's pricing variables which are themselves highly correlated risk assessments. This introduces a degree of decision circularity. Model B (Pure Underwriting Scorecard) shows that a model built solely on raw credit bureau and demographic features remains competitive (OOT AUC = 0.6821 vs Model A's 0.6988, both as reported in Table~\ref{tab:underwriting_comparison}), supporting the scorecard's viability in an independent bank underwriting environment.
 
 \begin{table}[H]
 \centering
@@ -415,7 +415,7 @@ To address potential policy-decision circularity from using LendingClub's own un
 \toprule
 \textbf{Model} & \textbf{Features Included} & \textbf{OOT AUC} & \textbf{OOT Gini} \\
 \midrule
-Model A (Full Scorecard) & Bureau + Application + int\_rate + grade & 0.6989 & 0.3977 \\
+Model A (Full Scorecard) & Bureau + Application + int\_rate + grade & 0.6988 & 0.3977 \\
 Model B (Underwriting) & Bureau + Application (excludes int\_rate/grade) & 0.6821 & 0.3642 \\
 \bottomrule
 \end{tabular}
@@ -450,14 +450,14 @@ The pooled accepts and parcelled rejects population was refitted to produce a co
         \textbf{Scorecard Population} & \textbf{Gini} & \textbf{Business Interpretation} \\
         \midrule
         \textbf{Accepts-Only (Base)} & 0.4011 & Champion scorecard on the approved-only in-time test partition. \\
-        \textbf{Through-the-Door (Parcelled Refit)} & 0.3818 & Corrected scorecard accounts for selection bias across TTD. \\
+        \textbf{Through-the-Door (Parcelled Refit)} & 0.3467 & Corrected scorecard accounts for selection bias across TTD. \\
         \midrule
-        \textbf{Gini Coefficient Shift} & -0.0193 & Conservative risk dilution when scoring raw through-the-door applicants. \\
+        \textbf{Gini Coefficient Shift} & -0.0544 & Conservative risk dilution when scoring raw through-the-door applicants. \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The Gini shift of \textbf{-0.0193} points is consistent with the standard credit-cycle finding that through-the-door populations carry higher latent risk. \emph{Measurement caveat:} the shift is computed \emph{within} the parcelled refit --- the same through-the-door model scored on the accepts subset versus on the full accepts-plus-parcelled population --- and both figures are in-sample; the rejects additionally carry inferred, not observed, labels. The shift is then applied to the champion scorecard's held-out Gini to obtain the through-the-door figure in the table. The two rows are therefore not two independently validated scorecards, and the shift should be read as a directional selection-bias indicator rather than a measured out-of-sample degradation.
+The Gini shift of \textbf{-0.0544} points is consistent with the standard credit-cycle finding that through-the-door populations carry higher latent risk. \emph{Measurement caveat:} the shift is computed \emph{within} the parcelled refit --- the same through-the-door model scored on the accepts subset versus on the full accepts-plus-parcelled population --- and both figures are in-sample; the rejects additionally carry inferred, not observed, labels. The shift is then applied to the champion scorecard's held-out Gini to obtain the through-the-door figure in the table. The two rows are therefore not two independently validated scorecards, and the shift should be read as a directional selection-bias indicator rather than a measured out-of-sample degradation.
 
 \subsection{Survival Analysis: Kaplan-Meier and Cox Proportional Hazards}
 The production PD term structure (Section~6) is a discrete-time hazard model. As a challenger model we additionally fit a time-to-event survival model, the industry standard for IFRS~9 lifetime-PD term-structure work \parencite{bellotti2009}. Kaplan-Meier estimators give non-parametric survival curves $S(t)$ per credit grade (Figure~\ref{fig:km_survival}), and a Cox proportional-hazards model quantifies each covariate's multiplicative effect on the default hazard. The duration is a months-on-book proxy derived from cumulative payments and the event is the binary default flag, a synthesised time-to-event dataset since the raw data records no observed default month (a documented limitation revisited in Section~10). The model's rank-discrimination is summarised by the concordance index (Cox C-index $=$ 0.6439), the survival-analysis analogue of the AUC.
@@ -601,14 +601,14 @@ Table~\ref{tab:basel_comparison} compares the capital requirements calculated us
 \toprule
 \textbf{Capital Metric} & \textbf{Basel IRB (Risk-Sensitive)} & \textbf{Standardised Approach (SA)} \\
 \midrule
-Total Portfolio RWA & \$19,585,499,179 & \$7,077,949,899 \\
-Minimum Capital Reserve (8\%) & \$1,566,839,934 & \$566,235,992 \\
-Portfolio RWA Density & 207.5\% & 75.0\% \\
+Total Portfolio RWA & \$21,592,289,075 & \$7,077,949,899 \\
+Minimum Capital Reserve (8\%) & \$1,727,383,126 & \$566,235,992 \\
+Portfolio RWA Density & 228.8\% & 75.0\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The risk-sensitive IRB approach determines an RWA density of \textbf{207.5\%}. This risk-sensitive capital requirement demonstrates the value of developing internal risk models, indicating a necessary capital surcharge of \textbf{\$1,000,603,942} compared to the flat Standardised Approach, ensuring that the bank remains adequately capitalised against default stress in this retail portfolio.
+The risk-sensitive IRB approach determines an RWA density of \textbf{228.8\%}. This risk-sensitive capital requirement demonstrates the value of developing internal risk models, indicating a necessary capital surcharge of \textbf{\$1,161,147,134} compared to the flat Standardised Approach, ensuring that the bank remains adequately capitalised against default stress in this retail portfolio.
 
 \subsection{Basel III Economic Capital \& Macro Stress Testing}
 We implemented a mathematically rigorous \textbf{Vasicek credit cycle stress test} \parencite{engelmann2011} to measure how the portfolio's expected and unexpected losses respond to a severe systematic contraction:
@@ -628,14 +628,14 @@ Table~\ref{tab:stress_testing} compares the portfolio's capital adequacy reserve
         \toprule
         \textbf{Dimension} & \textbf{Base IRB} & \textbf{Stressed IRB} & \textbf{Increase} \\
         \midrule
-        \textbf{Expected Loss (EL)} & \$1,632,451,860 & \$3,645,431,011 & 123.3\% \\
-        \textbf{Risk-Weighted Assets (RWA)} & \$19,585,499,179 & \$22,570,712,607 & 15.2\% \\
-        \textbf{Capital Requirement (8\%)} & \$1,566,839,934 & \$1,805,657,009 & 15.2\% \\
+        \textbf{Expected Loss (EL)} & \$2,316,616,242 & \$4,571,041,038 & 97.3\% \\
+        \textbf{Risk-Weighted Assets (RWA)} & \$21,592,289,075 & \$21,039,974,576 & -2.6\% \\
+        \textbf{Capital Requirement (8\%)} & \$1,727,383,126 & \$1,683,197,966 & -2.6\% \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-Under the severe systematic stress shock ($Z = -2.0$), the portfolio's expected loss rises by 123.3\%, and the RWA expands by 15.2\%. This result feeds directly into capital adequacy planning (ICAAP).
+Under the severe systematic stress shock ($Z = -2.0$), the portfolio's expected loss rises by 97.3\%, and the RWA expands by -2.6\%. This result feeds directly into capital adequacy planning (ICAAP).
 
 \subsection{Monte Carlo Economic Capital: VaR and Expected Shortfall}
 Basel IRB delivers \emph{regulatory} capital under a closed-form, infinitely-granular single-factor assumption. \emph{Economic} capital is read directly off the full simulated portfolio loss distribution, which captures the tail more faithfully and distinguishes Value-at-Risk (VaR) from Expected Shortfall (ES / CVaR), the coherent tail measure now favoured under the Basel FRTB framework \parencite{mcneil2015}. We simulate the loss distribution with a Monte Carlo ASRF (Vasicek) engine: a single systematic factor $Z \sim N(0,1)$ is drawn per scenario, obligors' conditional PDs follow Equation~(\ref{eq:vasicek_ec}), and idiosyncratic default risk enters through a per-bucket Binomial draw.
@@ -663,14 +663,14 @@ Table~\ref{tab:risk_measures} reports the resulting risk measures. Expected Shor
 \toprule
 \textbf{Risk Measure} & \textbf{Value (\$M)} \\
 \midrule
-Expected Loss (EL) & 1,633.50 \\
-Value-at-Risk (VaR 99.9\%) & 5,055.89 \\
-Expected Shortfall (ES 99.9\%) & 5,398.79 \\
-Unexpected Loss (UL $=$ VaR $-$ EL) & 3,422.38 \\
+Expected Loss (EL) & 2,317.66 \\
+Value-at-Risk (VaR 99.9\%) & 5,892.80 \\
+Expected Shortfall (ES 99.9\%) & 6,183.94 \\
+Unexpected Loss (UL $=$ VaR $-$ EL) & 3,575.14 \\
 \midrule
-\textbf{Economic Capital (EC $=$ ES $-$ EL)} & \textbf{3,765.29} \\
-Basel IRB Regulatory Capital (8\%) & 1,566.84 \\
-EC / Regulatory Capital & 240.3\% \\
+\textbf{Economic Capital (EC $=$ ES $-$ EL)} & \textbf{3,866.28} \\
+Basel IRB Regulatory Capital (8\%) & 1,727.38 \\
+EC / Regulatory Capital & 223.8\% \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -691,7 +691,7 @@ Credit Grade & 0.2129 & 4.7 & 7 & 28.6\% \\
 Loan Purpose & 0.4275 & 2.3 & 14 & 61.2\% \\
 Borrower State & 0.0549 & 18.2 & 51 & 15.0\% \\
 \midrule
-\multicolumn{5}{l}{\textbf{Granularity Adjustment (capital surcharge):} \$781} \\
+\multicolumn{5}{l}{\textbf{Granularity Adjustment (capital surcharge):} \$965} \\
 \midrule
 \multicolumn{5}{p{0.95\linewidth}}{\footnotesize The Gordy--L\"utkebohmert granularity adjustment is a single-\emph{name} idiosyncratic-risk add-on ($\sum_i \mathrm{UL}_i^2 / 2\,\mathrm{EAD}_{\text{tot}}$); on this loan-granular book (hundreds of thousands of small exposures) it is near-zero by construction and is distinct from the segment-level HHI figures above, which measure concentration across grade / purpose / state buckets rather than individual names.} \\
 \bottomrule
@@ -797,9 +797,9 @@ House Price Index Growth (HPI\_growth) & -0.0095 & +1\% HPI Growth $\rightarrow$
 \midrule
 \textbf{Scenario} & \textbf{Implied Default Rate} & \textbf{Mapped Vasicek Shock ($Z$) / Weight} \\
 \midrule
-Upside Scenario & 12.04\% & 0.3385 (weight 25\%) \\
+Upside Scenario & 12.05\% & 0.3367 (weight 25\%) \\
 Baseline Scenario & 17.09\% & -0.1915 (weight 50\%) \\
-Downside Scenario & 32.31\% & -1.3616 (weight 25\%) \\
+Downside Scenario & 36.67\% & -1.6433 (weight 25\%) \\
 \bottomrule
 \multicolumn{3}{p{\linewidth}}{\footnotesize$^{\dagger}$ The raw contemporaneous OLS produced a spurious \emph{negative} UNRATE coefficient (-0.0199) (raw OLS $R^2=0.611$): LendingClub charge-offs lag the macro cycle and origination underwriting drifts over 2007--2018, so tightly-underwritten high-unemployment vintages show \emph{lower} realised defaults than the loosely-underwritten low-unemployment 2015--16 vintages. For scenario projection the series is lagged 2 quarter(s) and economically-correct sign priors are imposed (magnitude from the fitted OLS), guaranteeing the intuitive Downside $>$ Baseline $>$ Upside ordering. The coefficients shown are these projection coefficients; raw OLS values are reported inline above.} \\
 \end{tabular}
@@ -814,9 +814,9 @@ Downside Scenario & 32.31\% & -1.3616 (weight 25\%) \\
 \toprule
 \textbf{Scenario} & \textbf{UNRATE (\%)} & \textbf{GDP Growth (\%)} & \textbf{FEDFUNDS (\%)} & \textbf{CPI Inflation (\%)} & \textbf{HPI Growth (\%)} \\
 \midrule
-Upside & 6.63 & 1.74 & 0.10 & 0.42 & 1.88 \\
+Upside & 6.63 & 1.74 & 0.25 & 0.27 & 1.88 \\
 Baseline & 7.63 & 0.74 & 0.50 & 0.42 & -0.12 \\
-Downside & 10.63 & -2.26 & 0.10 & 0.42 & -8.12 \\
+Downside & 10.63 & -2.26 & 2.50 & 1.92 & -8.12 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -859,7 +859,7 @@ Basel IRB capital is calibrated on a Through-the-Cycle (TTC) PD, a macro-neutral
 \section{Model Validation}
 
 \subsection{Discrimination Performance (OOT)}
-Model validation is performed on the completely held-out Out-of-Time (OOT) dataset ($2016$--$2018$). The PD scorecard shows stable performance with an OOT AUC of \textbf{0.6989} and a Kolmogorov-Smirnov (KS) statistic of \textbf{0.2873}.
+Model validation is performed on the completely held-out Out-of-Time (OOT) dataset ($2016$--$2018$). The PD scorecard shows stable performance with an OOT AUC of \textbf{0.6988} and a Kolmogorov-Smirnov (KS) statistic of \textbf{0.2872}.
 
 \begin{figure}[H]
 \centering
@@ -881,7 +881,7 @@ Model validation is performed on the completely held-out Out-of-Time (OOT) datas
 \end{figure}
 
 \subsection{Calibration Robustness}
-Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{0.0000}} < 0.05$). Given the very large sample size ($N = \text{538,515}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. A post-model recalibrator is fitted only when the \emph{in-time test} Hosmer-Lemeshow test rejects, so that the transform is always estimated out-of-sample relative to OOT. On this run the in-time test does \emph{not} reject ($p = 0.1330 > 0.05$), so \textbf{no calibrator is attached to the production scorecard and all reported PDs --- including those feeding Expected Loss, Basel RWA and IFRS~9 staging --- are raw, uncalibrated model output}. Table~\ref{tab:calibration_comparison} is therefore a \emph{diagnostic}: it fits an isotonic transform on the in-time test partition and reports what it \emph{would} do to the OOT diagnostics if deployed. It is not deployed, and on these figures it would not help --- discrimination is essentially unchanged and the calibration slope, intercept and expected default rate each move \emph{away} from their targets. We deliberately do \emph{not} fit the recalibrator on the OOT set itself --- doing so would trivially pass the Hosmer-Lemeshow test but would be an in-sample artefact. The residual higher-decile underprediction carries through to the ECL provisions and is listed among the known limitations in Section~10.
+Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{0.0000}} < 0.05$). Given the very large sample size ($N = \text{538,515}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. Recalibration is governed by an out-of-time gate. The OOT window is split chronologically: the earlier 269,258 loans form the fitting slice and the later 269,257 the evaluation slice. The gate \emph{triggers} on evidence of miscalibration in the fitting slice, \emph{fits} the candidate transform on that slice only, and \emph{accepts} it solely if it demonstrably improves calibration on the evaluation slice, which is never used for fitting. Gating on the in-time partition instead would be blind to the very era drift documented in Section~7.3 --- that test passes comfortably --- while fitting on the evaluation slice would trivially pass Hosmer-Lemeshow as an in-sample artefact. This design avoids both failure modes. On this run the gate \emph{triggered} (Hosmer-Lemeshow rejects on the fitting slice (p=0.0000); aggregate predicted/actual ratio 0.693 outside +/-10\%), selected an \emph{isotonic} transform by out-of-fold Brier score computed within the fitting slice, and \emph{accepted} it. On the held-out later slice the predicted-to-actual ratio moves from 0.690 to 0.998, the calibration intercept from 0.5365 to 0.0120, and the Brier score from 0.1800 to 0.1727. The transform \emph{is} attached to the production scorecard, so the PDs feeding Expected Loss, Basel RWA and IFRS~9 staging are recalibrated. Because every one of those improvements is measured on vintages excluded from the fit, this is an out-of-sample result rather than an in-sample artefact. Note that the IFRS 9 lifetime PD is produced by the separate hazard model and is not passed through this transform (Section~6.2), so the ECL provisions do not inherit the correction; the known limitations in Section~10 still apply.
 
 \begin{table}[H]
 \centering
@@ -893,15 +893,15 @@ Calibration was evaluated by comparing predicted default rates against actual ob
 \toprule
 \textbf{Metric} & \textbf{Target} & \textbf{Before Recalib.} & \textbf{After Recalib.} & \textbf{$\Delta$ Change} \\
 \midrule
-OOT AUC & --- & 0.6989 & 0.6986 & -0.0003 \\
+OOT AUC & --- & 0.6988 & 0.6985 & -0.0003 \\
 Brier Score & $<0.25$ & 0.1784 & 0.1798 & +0.0015 $\times$ \\
-Calibration Slope & $\approx 1.00$ & 1.0102 & 0.9837 & -0.0265 $\times$ \\
-Calibration Intercept & $\approx 0.00$ & 0.5273 & 0.5448 & +0.0175 $\times$ \\
+Calibration Slope & $\approx 1.00$ & 1.0102 & 0.9803 & -0.0299 $\times$ \\
+Calibration Intercept & $\approx 0.00$ & 0.5272 & 0.5397 & +0.0125 $\times$ \\
 Expected Default Rate & = Actual & 17.46\% & 16.72\% & -0.74\% $\times$ \\
 Actual Default Rate & 25.27\% & 25.27\% & 25.27\% & +0.00\% \\
 Hosmer-Lemeshow $p$ & $>0.05$ & 0.0000 & 0.0000 & $\ast$ below 0.05 \\
 \bottomrule
-\multicolumn{5}{p{\linewidth}}{\footnotesize \checkmark\ marks a metric that moved \emph{toward} its target and $\times$ one that moved away. Recalibration uses isotonic regression fitted \emph{out-of-sample} on the in time test partition and applied (transform only) to OOT; the OOT diagnostics above therefore reflect genuine generalisation, not in-sample recalibration. Fitting the calibrator on the OOT set itself would trivially pass the Hosmer-Lemeshow test and is deliberately avoided.} \\
+\multicolumn{5}{p{\linewidth}}{\footnotesize \checkmark\ marks a metric that moved \emph{toward} its target and $\times$ one that moved away. This table is a fixed diagnostic, not the production gate: isotonic regression fitted on the in time test partition and applied (transform only) to the whole OOT set. The production recalibration decision is made by the out-of-time gate described above, which fits inside the OOT window and validates on a disjoint later slice of it.} \\
 \end{tabular}
 \end{table}
 
@@ -932,7 +932,7 @@ Model backtesting compares the scorecard's predicted average PD against observed
 \end{equation}
 where $\bar{p}_v$ is the cohort-average predicted PD and $\bar{d}_v$ is the realised default rate. A ratio between 0.5 and 1.5 indicates acceptable calibration. Cohorts outside this band are flagged for recalibration ($\dagger$). Table~\ref{tab:pd_backtest} reports the backtesting results by vintage quarter.
 
-The systematic underprediction observed in the 2016--2018 vintages (PD Ratio consistently below 0.85) is consistent with the calibration drift identified in Section~7.2 and quantified by the era-specific diagnostic below, but \emph{not} corrected in production: no recalibrator is attached (Section~7.2), so this under-prediction carries through untreated into Expected Loss, Basel RWA and SICR-origination staging for the scorecard's \textbf{12-month} PD. The hazard model's \textbf{lifetime} PD that drives IFRS~9 ECL directly ($\text{ECL} = \sum_t m(t)\times\text{LGD}(t)\times\text{EAD}(t)/(1+\text{EIR})^t$) is a separate estimator and is \emph{not} passed through this scorecard recalibration; it is instead independently validated against realised lifetime default rates by vintage in Table~\ref{tab:lifetime_pd_calibration} (Section~6.2).
+The systematic underprediction observed in the 2016--2018 vintages (PD Ratio consistently below 0.85) is consistent with the calibration drift identified in Section~7.2 and corrected in production by the isotonic transform that the out-of-time gate accepted (Section~7.2), applied to the scorecard's 12-month PD feeding Expected Loss, Basel RWA and SICR staging. The hazard model's \textbf{lifetime} PD that drives IFRS~9 ECL directly ($\text{ECL} = \sum_t m(t)\times\text{LGD}(t)\times\text{EAD}(t)/(1+\text{EIR})^t$) is a separate estimator and is \emph{not} passed through this scorecard recalibration; it is instead independently validated against realised lifetime default rates by vintage in Table~\ref{tab:lifetime_pd_calibration} (Section~6.2).
 
 \begin{table}[H]
 \centering
@@ -945,55 +945,55 @@ The systematic underprediction observed in the 2016--2018 vintages (PD Ratio con
 \toprule
 \textbf{Vintage (Q)} & \textbf{N Loans} & \textbf{Predicted PD} & \textbf{Actual DR [95\% CI]} & \textbf{PD Ratio} \\
 \midrule
-2007Q2 & 24 & 9.65\% & 12.50\% [4.3\%, 31.0\%] & 0.77 {\checkmark} \\
-2007Q3 & 190 & 14.26\% & 21.05\% [15.9\%, 27.4\%] & 0.68 {\checkmark} \\
-2007Q4 & 389 & 16.28\% & 29.56\% [25.2\%, 34.3\%] & 0.55 {\checkmark} \\
-2008Q1 & 1,013 & 14.37\% & 23.10\% [20.6\%, 25.8\%] & 0.62 {\checkmark} \\
-2008Q2 & 498 & 13.10\% & 22.09\% [18.7\%, 25.9\%] & 0.59 {\checkmark} \\
-2008Q3 & 298 & 13.44\% & 17.45\% [13.6\%, 22.2\%] & 0.77 {\checkmark} \\
-2008Q4 & 584 & 11.20\% & 17.12\% [14.3\%, 20.4\%] & 0.65 {\checkmark} \\
-2009Q1 & 895 & 12.13\% & 13.74\% [11.6\%, 16.2\%] & 0.88 {\checkmark} \\
-2009Q2 & 1,098 & 10.96\% & 14.39\% [12.4\%, 16.6\%] & 0.76 {\checkmark} \\
-2009Q3 & 1,364 & 10.52\% & 12.76\% [11.1\%, 14.6\%] & 0.83 {\checkmark} \\
-2009Q4 & 1,924 & 10.88\% & 13.93\% [12.5\%, 15.5\%] & 0.78 {\checkmark} \\
-2010Q1 & 2,172 & 10.96\% & 11.69\% [10.4\%, 13.1\%] & 0.94 {\checkmark} \\
-2010Q2 & 3,006 & 13.01\% & 14.67\% [13.5\%, 16.0\%] & 0.89 {\checkmark} \\
-2010Q3 & 3,568 & 14.85\% & 15.05\% [13.9\%, 16.3\%] & 0.99 {\checkmark} \\
-2010Q4 & 3,791 & 13.92\% & 13.85\% [12.8\%, 15.0\%] & 1.01 {\checkmark} \\
-2011Q1 & 4,126 & 14.08\% & 13.69\% [12.7\%, 14.8\%] & 1.03 {\checkmark} \\
-2011Q2 & 5,102 & 14.27\% & 15.35\% [14.4\%, 16.4\%] & 0.93 {\checkmark} \\
-2011Q3 & 5,876 & 13.28\% & 14.65\% [13.8\%, 15.6\%] & 0.91 {\checkmark} \\
-2011Q4 & 6,617 & 14.26\% & 16.44\% [15.6\%, 17.4\%] & 0.87 {\checkmark} \\
-2012Q1 & 8,076 & 12.90\% & 16.15\% [15.4\%, 17.0\%] & 0.80 {\checkmark} \\
-2012Q2 & 10,447 & 15.33\% & 17.03\% [16.3\%, 17.8\%] & 0.90 {\checkmark} \\
-2012Q3 & 16,133 & 16.44\% & 16.45\% [15.9\%, 17.0\%] & 1.00 {\checkmark} \\
-2012Q4 & 18,711 & 17.24\% & 15.54\% [15.0\%, 16.1\%] & 1.11 {\checkmark} \\
-2013Q1 & 22,706 & 17.44\% & 15.02\% [14.6\%, 15.5\%] & 1.16 {\checkmark} \\
-2013Q2 & 30,668 & 18.51\% & 16.25\% [15.8\%, 16.7\%] & 1.14 {\checkmark} \\
-2013Q3 & 37,571 & 18.41\% & 15.56\% [15.2\%, 15.9\%] & 1.18 {\checkmark} \\
-2013Q4 & 43,862 & 18.13\% & 15.47\% [15.1\%, 15.8\%] & 1.17 {\checkmark} \\
-2014Q1 & 47,049 & 18.74\% & 16.55\% [16.2\%, 16.9\%] & 1.13 {\checkmark} \\
-2014Q2 & 52,528 & 19.05\% & 18.73\% [18.4\%, 19.1\%] & 1.02 {\checkmark} \\
-2014Q3 & 55,327 & 19.10\% & 18.94\% [18.6\%, 19.3\%] & 1.01 {\checkmark} \\
-2014Q4 & 68,533 & 18.81\% & 19.54\% [19.2\%, 19.8\%] & 0.96 {\checkmark} \\
-2016Q1 & 112,966 & 17.14\% & 21.09\% [20.9\%, 21.3\%] & 0.81 {\checkmark} \\
-2016Q2 & 63,851 & 17.32\% & 26.40\% [26.1\%, 26.7\%] & 0.66 {\checkmark} \\
-2016Q3 & 62,074 & 18.18\% & 27.37\% [27.0\%, 27.7\%] & 0.66 {\checkmark} \\
-2016Q4 & 58,760 & 17.73\% & 25.75\% [25.4\%, 26.1\%] & 0.69 {\checkmark} \\
-2017Q1 & 48,333 & 17.40\% & 25.26\% [24.9\%, 25.7\%] & 0.69 {\checkmark} \\
-2017Q2 & 46,274 & 17.53\% & 26.74\% [26.3\%, 27.1\%] & 0.66 {\checkmark} \\
-2017Q3 & 46,261 & 17.97\% & 27.90\% [27.5\%, 28.3\%] & 0.64 {\checkmark} \\
-2017Q4 & 36,457 & 17.34\% & 26.57\% [26.1\%, 27.0\%] & 0.65 {\checkmark} \\
-2018Q1 & 24,682 & 17.04\% & 26.49\% [25.9\%, 27.0\%] & 0.64 {\checkmark} \\
-2018Q2 & 20,929 & 17.15\% & 27.84\% [27.2\%, 28.5\%] & 0.62 {\checkmark} \\
-2018Q3 & 12,049 & 16.82\% & 22.89\% [22.1\%, 23.6\%] & 0.73 {\checkmark} \\
-2018Q4 & 5,879 & 16.05\% & 16.52\% [15.6\%, 17.5\%] & 0.97 {\checkmark} \\
+2007Q2 & 24 & 14.52\% & 12.50\% [4.3\%, 31.0\%] & 1.16 {\checkmark} \\
+2007Q3 & 190 & 21.19\% & 21.05\% [15.9\%, 27.4\%] & 1.01 {\checkmark} \\
+2007Q4 & 389 & 24.37\% & 29.56\% [25.2\%, 34.3\%] & 0.82 {\checkmark} \\
+2008Q1 & 1,013 & 21.75\% & 23.10\% [20.6\%, 25.8\%] & 0.94 {\checkmark} \\
+2008Q2 & 498 & 20.00\% & 22.09\% [18.7\%, 25.9\%] & 0.91 {\checkmark} \\
+2008Q3 & 298 & 20.50\% & 17.45\% [13.6\%, 22.2\%] & 1.17 {\checkmark} \\
+2008Q4 & 584 & 17.08\% & 17.12\% [14.3\%, 20.4\%] & 1.00 {\checkmark} \\
+2009Q1 & 895 & 18.41\% & 13.74\% [11.6\%, 16.2\%] & 1.34 {\checkmark} \\
+2009Q2 & 1,098 & 16.64\% & 14.39\% [12.4\%, 16.6\%] & 1.16 {\checkmark} \\
+2009Q3 & 1,364 & 16.04\% & 12.76\% [11.1\%, 14.6\%] & 1.26 {\checkmark} \\
+2009Q4 & 1,924 & 16.62\% & 13.93\% [12.5\%, 15.5\%] & 1.19 {\checkmark} \\
+2010Q1 & 2,172 & 16.70\% & 11.69\% [10.4\%, 13.1\%] & 1.43 {\checkmark} \\
+2010Q2 & 3,006 & 19.39\% & 14.67\% [13.5\%, 16.0\%] & 1.32 {\checkmark} \\
+2010Q3 & 3,568 & 21.80\% & 15.05\% [13.9\%, 16.3\%] & 1.45 {\checkmark} \\
+2010Q4 & 3,791 & 20.46\% & 13.85\% [12.8\%, 15.0\%] & 1.48 {\checkmark} \\
+2011Q1 & 4,126 & 20.59\% & 13.69\% [12.7\%, 14.8\%] & 1.50 $\dagger$ \\
+2011Q2 & 5,102 & 20.87\% & 15.35\% [14.4\%, 16.4\%] & 1.36 {\checkmark} \\
+2011Q3 & 5,876 & 19.51\% & 14.65\% [13.8\%, 15.6\%] & 1.33 {\checkmark} \\
+2011Q4 & 6,617 & 20.86\% & 16.44\% [15.6\%, 17.4\%] & 1.27 {\checkmark} \\
+2012Q1 & 8,076 & 19.08\% & 16.15\% [15.4\%, 17.0\%] & 1.18 {\checkmark} \\
+2012Q2 & 10,447 & 22.39\% & 17.03\% [16.3\%, 17.8\%] & 1.31 {\checkmark} \\
+2012Q3 & 16,133 & 23.94\% & 16.45\% [15.9\%, 17.0\%] & 1.46 {\checkmark} \\
+2012Q4 & 18,711 & 24.96\% & 15.54\% [15.0\%, 16.1\%] & 1.61 $\dagger$ \\
+2013Q1 & 22,706 & 25.26\% & 15.02\% [14.6\%, 15.5\%] & 1.68 $\dagger$ \\
+2013Q2 & 30,668 & 26.58\% & 16.25\% [15.8\%, 16.7\%] & 1.64 $\dagger$ \\
+2013Q3 & 37,571 & 26.52\% & 15.56\% [15.2\%, 15.9\%] & 1.70 $\dagger$ \\
+2013Q4 & 43,862 & 26.06\% & 15.47\% [15.1\%, 15.8\%] & 1.68 $\dagger$ \\
+2014Q1 & 47,049 & 26.89\% & 16.55\% [16.2\%, 16.9\%] & 1.62 $\dagger$ \\
+2014Q2 & 52,528 & 27.22\% & 18.73\% [18.4\%, 19.1\%] & 1.45 {\checkmark} \\
+2014Q3 & 55,327 & 27.21\% & 18.94\% [18.6\%, 19.3\%] & 1.44 {\checkmark} \\
+2014Q4 & 68,533 & 26.85\% & 19.54\% [19.2\%, 19.8\%] & 1.37 {\checkmark} \\
+2016Q1 & 112,966 & 24.70\% & 21.09\% [20.9\%, 21.3\%] & 1.17 {\checkmark} \\
+2016Q2 & 63,851 & 25.03\% & 26.40\% [26.1\%, 26.7\%] & 0.95 {\checkmark} \\
+2016Q3 & 62,074 & 26.27\% & 27.37\% [27.0\%, 27.7\%] & 0.96 {\checkmark} \\
+2016Q4 & 58,760 & 25.71\% & 25.75\% [25.4\%, 26.1\%] & 1.00 {\checkmark} \\
+2017Q1 & 48,333 & 25.25\% & 25.26\% [24.9\%, 25.7\%] & 1.00 {\checkmark} \\
+2017Q2 & 46,274 & 25.39\% & 26.74\% [26.3\%, 27.1\%] & 0.95 {\checkmark} \\
+2017Q3 & 46,261 & 25.91\% & 27.90\% [27.5\%, 28.3\%] & 0.93 {\checkmark} \\
+2017Q4 & 36,457 & 25.02\% & 26.57\% [26.1\%, 27.0\%] & 0.94 {\checkmark} \\
+2018Q1 & 24,682 & 24.60\% & 26.49\% [25.9\%, 27.0\%] & 0.93 {\checkmark} \\
+2018Q2 & 20,929 & 24.74\% & 27.84\% [27.2\%, 28.5\%] & 0.89 {\checkmark} \\
+2018Q3 & 12,049 & 24.30\% & 22.89\% [22.1\%, 23.6\%] & 1.06 {\checkmark} \\
+2018Q4 & 5,879 & 23.38\% & 16.52\% [15.6\%, 17.5\%] & 1.42 {\checkmark} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsubsection*{Era-Specific Recalibration of the Vintage Drift}
-A single global recalibrator cannot correct an era-specific bias. We therefore fit separate isotonic and Platt recalibrators for the pre-2016 and 2016--2018 eras and measure, per vintage group, the raw and recalibrated PD ratio against the realised default rate (Table~\ref{tab:vintage_calib}, Figure~\ref{fig:vintage_calib}). The raw ratio is materially below $1.0$ for the newer vintages (the documented under-prediction), and the era-specific isotonic recalibration moves it back toward $1.0$. This is an in-sample diagnostic that quantifies the drift and demonstrates the correction; production PD is unchanged. Since the era-specific calibrators are fitted and evaluated on the same vintage partitions (e.g. 2016--2018), the resulting alignment (Isotonic/Platt PD equals the Actual DR of 25.27% exactly) is in-sample and tautological: it is a diagnostic baseline that demonstrates the extent of the raw model's drift, not a validation of the recalibrator's out-of-sample generalization.
+A single global recalibrator cannot correct an era-specific bias. We therefore fit separate isotonic and Platt recalibrators for the pre-2016 and 2016--2018 eras and measure, per vintage group, the raw and recalibrated PD ratio against the realised default rate (Table~\ref{tab:vintage_calib}, Figure~\ref{fig:vintage_calib}). The raw ratio is materially below $1.0$ for the newer vintages (the documented under-prediction), and the era-specific isotonic recalibration moves it back toward $1.0$. This is an in-sample diagnostic that quantifies the drift and demonstrates the correction; production PD is unchanged. Since the era-specific calibrators are fitted and evaluated on the same vintage partitions (e.g. 2016--2018), the resulting alignment (Isotonic/Platt PD equals the Actual DR exactly) is in-sample and tautological: it is a diagnostic baseline that demonstrates the extent of the raw model's drift, not a validation of the recalibrator's out-of-sample generalization.
 
 \begin{table}[H]
 \centering
@@ -1004,9 +1004,9 @@ A single global recalibrator cannot correct an era-specific bias. We therefore f
 \toprule
 \textbf{Vintage} & \textbf{N} & \textbf{Raw PD} & \textbf{Isotonic PD} & \textbf{Platt PD} & \textbf{Actual DR} & \textbf{Raw Ratio} \\
 \midrule
-2007-2012 & 95,902 & 14.84\% & 14.16\% & 14.38\% & 15.72\% & 0.944 \\
-2013-2014 & 358,244 & 18.64\% & 17.87\% & 17.81\% & 17.45\% & 1.068 \\
-2016-2018 & 538,515 & 17.46\% & 25.27\% & 25.27\% & 25.27\% & 0.691 \\
+2007-2012 & 95,902 & 21.75\% & 14.17\% & 14.25\% & 15.72\% & 1.384 \\
+2013-2014 & 358,244 & 26.71\% & 17.87\% & 17.86\% & 17.45\% & 1.530 \\
+2016-2018 & 538,515 & 25.24\% & 25.27\% & 25.28\% & 25.27\% & 0.999 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1031,8 +1031,8 @@ The stage migration matrix quantifies transitions between IFRS~9 performance sta
 \toprule
 \textbf{From Stage} & \textbf{To Stage~1} & \textbf{To Stage~2} & \textbf{To Stage~3} \\
 \midrule
-\textbf{Stage~1} & 381542 & 149847 & 92772 \\
-\textbf{Stage~2} & 105796 & 141812 & 120892 \\
+\textbf{Stage~1} & 326472 & 127324 & 76521 \\
+\textbf{Stage~2} & 160866 & 164335 & 137143 \\
 \textbf{Stage~3} & 0 & 0 & 0 \\
 \bottomrule
 \multicolumn{4}{p{0.92\linewidth}}{\footnotesize\textit{Note:} the ``From Stage~3'' row is zero \emph{by construction of the reconstruction}, not as an empirical finding: the interpolated $t-12$ classifier only ever assigns Stage~1 or Stage~2, because the credit-impaired flag available in this dataset is the terminal resolved outcome and cannot be evaluated at a historical date. Loans that were already credit-impaired twelve months before the reporting date are therefore absorbed into the Stage~1 and Stage~2 rows, and the true migration \emph{out} of Stage~3 is unobservable here.} \\
@@ -1087,13 +1087,13 @@ GFC-like (PD x3.0) & 3,279.40 & +950.09 & +40.8\% \\
 
 \subsection{Scientific Benchmark Verification Layer}
 
-To situate our results, all modeling outputs are compared against published reference ranges drawn from the credit-risk literature. This is a comparison against published ranges, not a reproduction of the cited studies' experiments. Following \textcite{thomas2000survey} and the benchmarking study of \textcite{lessmann2015benchmarking}, our Probability of Default (PD) scorecard achieves an OOT Gini coefficient of \textbf{\num{0.3977}} (AUC of \textbf{\num{0.6989}}), which sits within the empirical range of $0.30$--$0.45$ reported for high-volume retail loan portfolios (equivalently AUC $0.65$--$0.73$, since $\text{Gini} = 2\,\text{AUC}-1$).
+To situate our results, all modeling outputs are compared against published reference ranges drawn from the credit-risk literature. This is a comparison against published ranges, not a reproduction of the cited studies' experiments. Following \textcite{thomas2000survey} and the benchmarking study of \textcite{lessmann2015benchmarking}, our Probability of Default (PD) scorecard achieves an OOT Gini coefficient of \textbf{\num{0.3977}} (AUC of \textbf{\num{0.6988}}), which sits within the empirical range of $0.30$--$0.45$ reported for high-volume retail loan portfolios (equivalently AUC $0.65$--$0.73$, since $\text{Gini} = 2\,\text{AUC}-1$).
 
 The deployed severity model, selected by lower out-of-sample error from a two-stage model and a LightGBM challenger, yields a Mean LGD of \textbf{\num{0.8931}} (and Downturn LGD of \textbf{\num{1.0000}}). This out-of-sample-validated loss rate sits above both the $0.45$--$0.55$ unsecured range reported by \textcite{schuermann2004} (corporate/wholesale debt) and the lower $0.25$--$0.45$ revolving retail credit-card band of \textcite{bellotti2012}, consistent with the low post-charge-off collection recovery typical of unsecured instalment loans once EAD is measured on a principal-only basis (driver discussed in Table~\ref{tab:benchmark_verification}).
 
-Under the Basel Committee regulatory standards \parencite{bcbs2004,bcbs2017}, the risk-sensitive internal ratings-based (IRB) approach sets our Risk-Weighted Asset (RWA) density at \textbf{207.5\%}, above the flat 75\% risk weight assumed by the Standardised Approach (SA). Because this portfolio is a high-yield, higher-risk unsecured book, the risk-sensitive approach produces a capital \emph{surcharge} rather than relief, the expected outcome when portfolio risk exceeds the level implicit in the flat SA weight.
+Under the Basel Committee regulatory standards \parencite{bcbs2004,bcbs2017}, the risk-sensitive internal ratings-based (IRB) approach sets our Risk-Weighted Asset (RWA) density at \textbf{228.8\%}, above the flat 75\% risk weight assumed by the Standardised Approach (SA). Because this portfolio is a high-yield, higher-risk unsecured book, the risk-sensitive approach produces a capital \emph{surcharge} rather than relief, the expected outcome when portfolio risk exceeds the level implicit in the flat SA weight.
 
-Consistent with the reject inference analysis of \textcite{crook2004reject}, the inclusion of parcelled rejected applications leads to a Gini shift of \textbf{\num{-0.0193}}. This shift is consistent with the presence of selection bias; through-the-door refitting produces a small, conservative change in the fitted parameters.
+Consistent with the reject inference analysis of \textcite{crook2004reject}, the inclusion of parcelled rejected applications leads to a Gini shift of \textbf{\num{-0.0544}}. This shift is consistent with the presence of selection bias; through-the-door refitting produces a small, conservative change in the fitted parameters.
 
 Table~\ref{tab:benchmark_verification} presents a structured side-by-side comparison of our empirical results against published scientific benchmarks.
 
@@ -1108,13 +1108,13 @@ Table~\ref{tab:benchmark_verification} presents a structured side-by-side compar
 \toprule
 \textbf{Metric / Parameter} & \textbf{Project Value} & \textbf{Published Benchmark} & \textbf{Academic Source} & \textbf{Verdict} & \textbf{Comment} \\
 \midrule
-PD AUC (OOT) & \textbf{\num{0.6989}} & $0.65 - 0.73$ & \textcite{lessmann2015benchmarking} & Within range &  \\
+PD AUC (OOT) & \textbf{\num{0.6988}} & $0.65 - 0.73$ & \textcite{lessmann2015benchmarking} & Within range &  \\
 PD Gini (OOT) & \textbf{\num{0.3977}} & $0.30 - 0.45$ & \textcite{lessmann2015benchmarking} & Within range & \\
 LGD Mean & \textbf{\num{0.8931}} & $0.25 - 0.45$ & \textcite{bellotti2012} & Above typical range & The OOS-validated LightGBM severity model puts mean LGD above both cited bands, consistent with low post-charge-off recovery on unsecured instalment loans once EAD is principal-only; the rejected two-stage model materially under-predicted severity (OOS $R^2 \approx -2.70$) \\
 LGD $R^2$ (OOS) & \textbf{-0.0709} & $0.04 - 0.43$ & \textcite{loterman2012benchmarking} & Below typical range & LGD is strongly bimodal (mass at 0 and near 1), so $R^2$ is an unforgiving metric and is routinely low or negative out-of-time; \textcite{loterman2012benchmarking} themselves report a wide $0.04$--$0.43$ spread. The negative value reflects a 2016--2018 severity regime shift versus the fitting vintages \\
-RWA Density & \textbf{207.5\%} & 75\% -- 100\% & \textcite{bcbs2017} & Above typical range & Risk-sensitive IRB density exceeds the flat SA weight: the OOS-validated LGD (mean $\approx 0.89$, above published unsecured LGD ranges --- driver discussed in the LGD Mean row above) and high empirical default rate on this unsecured, high-yield book drive a capital \emph{surcharge} --- the economically expected outcome, not an inconsistency \\
+RWA Density & \textbf{228.8\%} & 75\% -- 100\% & \textcite{bcbs2017} & Above typical range & Risk-sensitive IRB density exceeds the flat SA weight: the OOS-validated LGD (mean $\approx 0.89$, above published unsecured LGD ranges --- driver discussed in the LGD Mean row above) and high empirical default rate on this unsecured, high-yield book drive a capital \emph{surcharge} --- the economically expected outcome, not an inconsistency \\
 IRB vs SA Capital & IRB $>$ SA & Risk-sensitive & \textcite{bcbs2004} & Consistent & Risk-sensitive IRB exceeds the flat 75\% SA weight for this higher-risk unsecured book: a capital \emph{surcharge}, not relief, is the economically expected outcome \\
-Reject Inference $\Delta$Gini & \textbf{\num{-0.0193}} & $0.00 - 0.10$ & \textcite{crook2004reject} & Below typical range & \\
+Reject Inference $\Delta$Gini & \textbf{\num{-0.0544}} & $0.00 - 0.10$ & \textcite{crook2004reject} & Below typical range & \\
 Score PSI & \textbf{\num{0.0030}} & $0.00 - 0.10$ & \textcite{siddiqi2017} & Within range & \\
 \bottomrule
 \end{tabularx}
@@ -1144,16 +1144,16 @@ Table~\ref{tab:ml_comparison} presents the out-of-time (OOT) generalization benc
 \toprule
 \textbf{Model Name} & \textbf{Test AUC} & \textbf{OOT AUC} & \textbf{Test Gini} & \textbf{OOT Gini} & \textbf{Test KS} & \textbf{OOT KS} & \textbf{Time (s)} \\
 \midrule
-\textbf{Logistic Scorecard} & 0.7006 & 0.6989 & 0.4011 & 0.3977 & 0.2915 & 0.2873 & 189.10s \\
-\textbf{LightGBM Classifier} & 0.7064 & 0.7027 & 0.4128 & 0.4055 & 0.3013 & 0.2925 & 2.82s \\
-\textbf{XGBoost Classifier} & 0.7057 & 0.7020 & 0.4113 & 0.4041 & 0.2983 & 0.2924 & 3.08s \\
-\textbf{Random Forest Classifier} & 0.7043 & 0.7006 & 0.4086 & 0.4013 & 0.2984 & 0.2890 & 11.44s \\
-\textbf{Weighted Ensemble} & 0.7061 & 0.7030 & 0.4122 & 0.4060 & 0.2999 & 0.2930 & 17.35s \\
+\textbf{Logistic Scorecard} & 0.7006 & 0.6988 & 0.4011 & 0.3977 & 0.2916 & 0.2872 & 207.32s \\
+\textbf{LightGBM Classifier} & 0.7064 & 0.7027 & 0.4128 & 0.4055 & 0.3013 & 0.2925 & 2.60s \\
+\textbf{XGBoost Classifier} & 0.7057 & 0.7020 & 0.4113 & 0.4041 & 0.2983 & 0.2924 & 2.80s \\
+\textbf{Random Forest Classifier} & 0.7043 & 0.7006 & 0.4086 & 0.4013 & 0.2984 & 0.2890 & 10.53s \\
+\textbf{Weighted Ensemble} & 0.7061 & 0.7030 & 0.4122 & 0.4060 & 0.2999 & 0.2930 & 15.94s \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Notably, the tree-based challengers, evaluated on an identical predictor set, \emph{outperform} the WoE logistic scorecard on out-of-time discrimination: the scorecard's OOT AUC of 0.6989 is exceeded by Weighted Ensemble (0.7030), LightGBM Classifier (0.7027), XGBoost Classifier (0.7020), Random Forest Classifier (0.7006). The best challenger (Weighted Ensemble) leads by 0.0041 AUC. We report this plainly rather than presenting the scorecard as the discrimination winner: it is not. The scorecard is retained as champion on \emph{governance} grounds --- exact per-feature points attribution for adverse-action reasons, a monotone and auditable functional form, and a stable calibration story --- and the cost of that choice is the AUC gap quantified here, which a model-risk committee should weigh explicitly rather than have hidden. \textbf{Feature parity.} The scorecard consumes 15 selected predictors and the tree challengers consume 15; the two model families are therefore evaluated on an identical predictor set, so the comparison below is like-for-like It should be noted that the challenger models (LightGBM, XGBoost, Random Forest) were trained using standard, default configurations without systematic hyperparameter grid search tuning. Hyperparameter optimisation would, if anything, widen any challenger advantage, so the ranking above should be read as a lower bound on what tuned tree models could achieve on this feature set.
+Notably, the tree-based challengers, evaluated on an identical predictor set, \emph{outperform} the WoE logistic scorecard on out-of-time discrimination: the scorecard's OOT AUC of 0.6988 is exceeded by Weighted Ensemble (0.7030), LightGBM Classifier (0.7027), XGBoost Classifier (0.7020), Random Forest Classifier (0.7006). The best challenger (Weighted Ensemble) leads by 0.0041 AUC. We report this plainly rather than presenting the scorecard as the discrimination winner: it is not. The scorecard is retained as champion on \emph{governance} grounds --- exact per-feature points attribution for adverse-action reasons, a monotone and auditable functional form, and a stable calibration story --- and the cost of that choice is the AUC gap quantified here, which a model-risk committee should weigh explicitly rather than have hidden. \textbf{Feature parity.} The scorecard consumes 15 selected predictors and the tree challengers consume 15; the two model families are therefore evaluated on an identical predictor set, so the comparison below is like-for-like It should be noted that the challenger models (LightGBM, XGBoost, Random Forest) were trained using standard, default configurations without systematic hyperparameter grid search tuning. Hyperparameter optimisation would, if anything, widen any challenger advantage, so the ranking above should be read as a lower bound on what tuned tree models could achieve on this feature set.
 
 \subsubsection*{Is the Challenger's Edge Statistically Significant?}
 Point-estimate AUC/Gini gaps cannot distinguish a genuine improvement from sampling noise. To test significance we run a paired bootstrap: the same held-out OOT rows are resampled for both models and a confidence interval is built on the \emph{difference} in Gini (challenger $-$ champion). If that interval excludes zero, the difference is significant. Table~\ref{tab:ab_test} reports the result --- the interval lies entirely \emph{above} zero (median $+0.0078$), so the challenger's Gini advantage over the champion is statistically significant, not sampling noise. It complements the analytic DeLong test on the same pair.
@@ -1229,7 +1229,7 @@ The Gains Chart measures the model's ability to concentrate defaults within the 
 % -----------------------------------------------------------------------------
 \section{Business Decisioning and Cutoff Optimisation}
 
-Underwriting decisions require balancing credit risk, portfolio growth, and capital constraints. We evaluate each score cutoff on Expected Profit and Risk-Adjusted Return on Capital (RAROC), with expected loss (at the approved-population bad rate) and a 12.00\% cost-of-capital charge on economic capital both netted out. On this portfolio the unconstrained profit-maximising \emph{and} RAROC-maximising cutoff coincide at the most \emph{exclusive} non-empty cutoff on the grid (score \textbf{600}, approving only \textbf{0.015\%} of the population) --- every cutoff on the 400--800 grid returns a negative RAROC, so the argmax is simply the smallest, best-quality approved book rather than a genuinely profitable operating point, at a portfolio RAROC of \textbf{-11.77\%}. Because unconstrained optimisation therefore collapses to a vacuous near-zero-volume corner, the decision problem is formulated as a \emph{constrained} optimization: we maximize approved volume and expected profit subject to an active risk-appetite ceiling on the approved bad rate (\textbf{15.00\%}), taking the most inclusive cutoff (maximising approved profit) whose approved bad rate stays within that ceiling. This constrained boundary represents the recommended operating cutoff.
+Underwriting decisions require balancing credit risk, portfolio growth, and capital constraints. We evaluate each score cutoff on Expected Profit and Risk-Adjusted Return on Capital (RAROC), with expected loss (at the approved-population bad rate) and a 12.00\% cost-of-capital charge on economic capital both netted out. On this portfolio the unconstrained profit-maximising \emph{and} RAROC-maximising cutoff coincide at the most \emph{exclusive} non-empty cutoff on the grid (score \textbf{600}, approving only \textbf{0.015\%} of the population) --- every cutoff on the 400--800 grid returns a negative RAROC, so the argmax is simply the smallest, best-quality approved book rather than a genuinely profitable operating point, at a portfolio RAROC of \textbf{-7.26\%}. Because unconstrained optimisation therefore collapses to a vacuous near-zero-volume corner, the decision problem is formulated as a \emph{constrained} optimization: we maximize approved volume and expected profit subject to an active risk-appetite ceiling on the approved bad rate (\textbf{15.00\%}), taking the most inclusive cutoff (maximising approved profit) whose approved bad rate stays within that ceiling. This constrained boundary represents the recommended operating cutoff.
 
 We sweep score cutoffs from 400 to 800 (evaluating approved loan subsets) to calculate Expected Profit and RAROC. All components are expressed on a consistent \emph{per-annum} basis:
 \begin{itemize}
@@ -1252,10 +1252,10 @@ Table~\ref{tab:cutoff_raroc} displays the optimization results across selected s
 \toprule
 \textbf{Cutoff Score} & \textbf{Approval Rate} & \textbf{Bad Rate} & \textbf{Expected Profit} & \textbf{Expected Loss} & \textbf{RAROC} \\
 \midrule
-500 & 94.9\% & 20.01\% & \$-723,000,751 & \$1,347,131,489 & -51.01\% \\
-\textbf{530} & \textbf{61.4\%} & \textbf{13.79\%} & \textbf{\$-244,832,271} & \textbf{\$494,936,299} & \textbf{-34.09\%} \\
-540 & 43.7\% & 11.00\% & \$-138,283,481 & \$279,320,292 & -29.20\% \\
-580 & 2.5\% & 3.01\% & \$-4,549,213 & \$6,309,800 & -18.37\% \\
+500 & 94.9\% & 20.01\% & \$-1,364,042,252 & \$1,967,892,487 & -85.96\% \\
+\textbf{530} & \textbf{61.4\%} & \textbf{13.79\%} & \textbf{\$-527,448,663} & \textbf{\$763,379,420} & \textbf{-63.11\%} \\
+540 & 43.7\% & 11.00\% & \$-294,970,919 & \$427,524,729 & -54.25\% \\
+580 & 2.5\% & 3.01\% & \$-5,749,949 & \$7,462,118 & -22.86\% \\
 620 & 0.0\% & 0.00\% & \$0 & \$0 & 0.00\% \\
 660 & 0.0\% & 0.00\% & \$0 & \$0 & 0.00\% \\
 700 & 0.0\% & 0.00\% & \$0 & \$0 & 0.00\% \\
@@ -1263,7 +1263,7 @@ Table~\ref{tab:cutoff_raroc} displays the optimization results across selected s
 \end{tabular}
 \end{table}
 
-As shown in the table, the recommended operating cutoff is score \textbf{530} with an approval rate of \textbf{61.42\%}, a bad rate of \textbf{13.79\%}, an expected profit of \textbf{\$-244.8M}, and a RAROC of \textbf{-34.09\%} --- below the 15.00\% cost-of-capital hurdle. It is the most inclusive cutoff whose approved bad rate stays within the risk-appetite ceiling, and it appears as the highlighted row in Table~\ref{tab:cutoff_raroc} and is marked in Figure~\ref{fig:cutoff_profit}. A single objective drives the highlighted table row, the figure, and this text, so there is no discrepancy between the quoted cutoff and the swept grid. Relaxing the risk-appetite ceiling lowers the cutoff and raises approved volume; tightening it raises the cutoff toward the near-zero-volume unconstrained corner. Note that RAROC is negative across the entire 400--800 grid, so \emph{no} cutoff on this book clears the 15.00\% cost-of-capital hurdle --- the operating point is a risk-appetite compromise, not a profitable optimum.
+As shown in the table, the recommended operating cutoff is score \textbf{530} with an approval rate of \textbf{61.42\%}, a bad rate of \textbf{13.79\%}, an expected profit of \textbf{\$-527.4M}, and a RAROC of \textbf{-63.11\%} --- below the 15.00\% cost-of-capital hurdle. It is the most inclusive cutoff whose approved bad rate stays within the risk-appetite ceiling, and it appears as the highlighted row in Table~\ref{tab:cutoff_raroc} and is marked in Figure~\ref{fig:cutoff_profit}. A single objective drives the highlighted table row, the figure, and this text, so there is no discrepancy between the quoted cutoff and the swept grid. Relaxing the risk-appetite ceiling lowers the cutoff and raises approved volume; tightening it raises the cutoff toward the near-zero-volume unconstrained corner. Note that RAROC is negative across the entire 400--800 grid, so \emph{no} cutoff on this book clears the 15.00\% cost-of-capital hurdle --- the operating point is a risk-appetite compromise, not a profitable optimum.
 
 \begin{figure}[H]
 \centering
@@ -1331,10 +1331,9 @@ In other words, the headline ECL is, to first order, \emph{realised defaults} $\
     \item \textbf{Hazard-model event timing:} The discrete-time hazard model is fitted on a person-period panel in which every default event is placed in the loan's \emph{final} month, because the data records no observed default date, and no censoring is applied. The estimated months-on-book slope is therefore partly an artefact of this construction, and that term structure is what drives the ECL sum.
     \item \textbf{Portfolio aggregates are partly in-sample:} Expected Loss, Basel RWA and IFRS~9 ECL are computed over the combined train, in-time test and OOT partitions --- the same rows the scorecard, hazard and LGD models were fitted on. This is appropriate for provisioning a closed book but means the portfolio aggregates are not out-of-sample quantities; the out-of-sample evidence is the OOT discrimination and calibration in Section~7.
     \item \textbf{Constant exposure inside the ECL sum:} $\text{LGD}(t)$ and $\text{EAD}(t)$ are held at their per-loan point estimates across the ECL horizon rather than re-amortised monthly, which is conservative for amortising loans.
-    \item \textbf{Degenerate macro scenario axes:} The Federal Funds Rate floors at 0.10\% in \emph{both} the upside and downside scenarios, so the two are identical on that axis, and CPI inflation carries no scenario delta at all (it sits at the sample mean in all three). Combined with the imposed positive sign prior on FEDFUNDS, a modelled recession --- which in practice brings rate cuts --- \emph{reduces} projected defaults through that channel. Only unemployment, GDP growth and house-price growth differentiate the scenarios materially.
+    \item \textbf{The adverse scenario is a rate-and-inflation shock, not a lower-bound recession:} Every macro axis moves in the direction its imposed sign prior says raises defaults (downside) or lowers them (upside), so the required Downside $>$ Baseline $>$ Upside ordering holds \emph{by construction} for any non-negative coefficient magnitudes rather than depending on the fitted values. The consequence is that the downside tightens policy and raises inflation into the downturn. This is a deliberate choice: it is the more punitive configuration for an unsecured consumer book, where floating debt-service costs and a real-income squeeze compound the unemployment shock, and it matches how supervisory adverse scenarios are typically built. A deflationary lower-bound recession, in which policy is cut, would instead \emph{offset} part of the adverse shock through the rate channel and is not modelled here.
     \item \textbf{The ``baseline'' scenario maps to $Z = $ -0.1915, not $Z=0$:} This is a property of the Vasicek conditional-PD function, whose value at $Z=0$ does not equal the unconditional PD; the projection intercept is recentred so the baseline reproduces the through-the-cycle default rate. Under the report-wide convention that $Z<0$ is adverse, the baseline therefore reads as mildly adverse even though it is the central expectation.
     \item \textbf{Categorical Feature Encoding:} Grade, term, employment length and home ownership are ordinal-encoded before WoE binning. Label ordering assumptions (e.g., A=1 through G=7) are reasonable but should be validated against observed default rates for each category.
-    \item \textbf{DPD Roll-Rate Analysis (future work):} A monthly delinquency-bucket roll-rate transition matrix, the standard IFRS~9 monitoring-committee tool, is not produced here because the LendingClub accepted-loan file is loan-level with no monthly days-past-due panel. Building genuine roll-rates requires a monthly servicing snapshot feed, which is the recommended data extension for a production deployment.
 \end{itemize}
 
 \subsection{Empirical Results vs.\ Published Literature}
@@ -1358,7 +1357,7 @@ Mean LGD (P2P)       & 0.8931 & $0.25 - 0.45$
   & \cite{bellotti2012} & Above typical range & The OOS-validated LightGBM severity model puts mean LGD above both cited bands, consistent with low post-charge-off recovery on unsecured instalment loans once EAD is principal-only; the rejected two-stage model materially under-predicted severity (OOS $R^2 \approx -2.70$) \\
 Downturn LGD         & 1.0000 & $0.25 - 0.45$
   & \cite{bellotti2012} & Above typical range & Conservative 90th-percentile downturn uplift above the mean band \\
-IFRS~9 ECL Coverage  & 25.130\% & 40\% -- 45\%
+IFRS~9 ECL Coverage  & 25.302\% & 40\% -- 45\%
   & \cite{eba2022} & Below typical range & The published band is the EBA \emph{NPL} coverage ratio (allowance on \emph{non-performing} exposure only); the project figure is whole-book lifetime ECL over total EAD, which blends performing Stage~1 exposure and therefore sits below impaired-only coverage --- not a like-for-like gap \\
 IFRS~9 Stage~2\%     & 29.4\% & 8\% -- 11\%
   & \cite{eba2022} & Above typical range & Stage~2 share well above the EBA EU-aggregate ($\approx$9--10\%): expected for an unsecured, high-yield US consumer book with materially higher SICR incidence than the diversified EU bank averages \\

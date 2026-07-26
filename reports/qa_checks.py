@@ -351,10 +351,27 @@ def check_recalibration_applied(tex_path: Path, metrics: dict, failures: list[st
     set", "retained", and feeding EL/RWA/staging (docs/AUDIT.md finding A1).
     """
     cal = metrics.get("calibration") or {}
-    if cal.get("isotonic_applied") is None:
+    if cal.get("isotonic_applied") is None and "recalibration_applied" not in cal:
         return
     comp = metrics.get("calibration_comparison") or {}
-    applied = bool(comp.get("applied_in_production", cal.get("isotonic_applied", False)))
+    applied = bool(
+        cal.get("recalibration_applied",
+                comp.get("applied_in_production", cal.get("isotonic_applied", False)))
+    )
+    # The gate's own record must agree with the attach state.
+    gate = cal.get("recalibration_gate") or {}
+    if gate:
+        _check(
+            bool(gate.get("accepted", False)) == applied,
+            f"recalibration_gate.accepted={gate.get('accepted')} contradicts "
+            f"recalibration_applied={applied}",
+            failures,
+        )
+        _check(
+            applied or cal.get("method_chosen", "none") == "none",
+            f"method_chosen={cal.get('method_chosen')!r} while no transform is attached",
+            failures,
+        )
     if applied:
         return
     text = tex_path.read_text(encoding="utf-8", errors="replace")
@@ -491,6 +508,63 @@ def check_challenger_feature_parity(metrics: dict, failures: list[str]) -> None:
     )
 
 
+
+def check_scenario_axes_separate(metrics: dict, failures: list[str]) -> None:
+    """Upside and downside must differ on every macro axis.
+
+    FEDFUNDS previously floored to 0.1 in both scenarios and CPI_inflation carried no
+    delta, so two of five axes contributed nothing to scenario separation while the
+    report tabulated them as assumptions (docs/AUDIT.md finding C5).
+    """
+    inputs = metrics.get("macro_scenario_inputs") or {}
+    up, down = inputs.get("upside") or {}, inputs.get("downside") or {}
+    if not (up and down):
+        return
+    identical = [
+        k for k in up
+        if k in down and abs(float(up[k]) - float(down[k])) < 1e-9
+    ]
+    _check(
+        not identical,
+        f"Macro scenario axes identical in upside and downside: {identical}; "
+        "they contribute nothing to scenario separation",
+        failures,
+    )
+
+
+
+def check_no_unescaped_percent(tex_path: Path, failures: list[str]) -> None:
+    """No inline unescaped ``%`` in the generated .tex.
+
+    A percent sign is a LaTeX comment: it deletes the rest of the source line from the
+    PDF with no error and no warning. Because the template writes each paragraph as one
+    long line, a single stray ``%`` in a value injected from Python can silently remove
+    hundreds of characters of evidence -- which is exactly what happened to the
+    recalibration decision in an earlier build (docs/AUDIT.md finding A1).
+
+    Whole-line comments (optionally indented) are legitimate and ignored.
+    """
+    failures_before = len(failures)
+    for lineno, line in enumerate(tex_path.read_text(encoding="utf-8", errors="replace").split("\n"), 1):
+        if line.lstrip().startswith("%"):
+            continue  # a real comment line
+        for col, ch in enumerate(line):
+            if ch != "%":
+                continue
+            if col > 0 and line[col - 1] == "\\":
+                continue  # escaped
+            _check(
+                False,
+                f"Unescaped '%' at {tex_path.name}:{lineno}:{col + 1} truncates the rest "
+                f"of the line in the PDF: ...{line[max(0, col - 60):col + 1]!r}",
+                failures,
+            )
+            break
+        if len(failures) - failures_before >= 5:
+            failures.append("... further unescaped '%' occurrences suppressed")
+            return
+
+
 def run_metric_checks(metrics: dict) -> None:
     """Run all metrics.json identity checks; raise QAError listing every failure."""
     failures: list[str] = []
@@ -505,6 +579,7 @@ def run_metric_checks(metrics: dict) -> None:
     check_es_ge_var(metrics, failures)
     check_benchmarks_sourced(failures)
     check_challenger_feature_parity(metrics, failures)
+    check_scenario_axes_separate(metrics, failures)
     if failures:
         raise QAError(
             "Report QA failed (%d issue(s)):\n  - %s"
@@ -519,6 +594,7 @@ def run_tex_checks(tex_path: str | Path, metrics: dict | None = None) -> None:
     failures: list[str] = []
     path = Path(tex_path)
     check_no_unreplaced_vars(path, failures)
+    check_no_unescaped_percent(path, failures)
     check_no_fabricated_benchmark(path, failures)
     check_citations_resolve(path, failures)
     if metrics is not None:

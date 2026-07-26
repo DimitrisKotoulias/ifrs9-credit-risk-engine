@@ -13,9 +13,10 @@ import numpy as np
 import pandas as pd
 
 from credit_risk.validation.calibration import (
+    chronological_oot_split,
     compute_calibration,
-    fit_isotonic_calibrator,
     plot_calibration_curve,
+    select_oot_recalibrator,
 )
 from credit_risk.validation.discrimination import (
     compute_decile_table,
@@ -56,6 +57,7 @@ def run_validation(
     X_train: pd.DataFrame | None = None,
     X_test: pd.DataFrame | None = None,
     X_oot: pd.DataFrame | None = None,
+    oot_order_key: np.ndarray | None = None,
     feature_cols: list[str] | None = None,
     output_dir: Path = Path("outputs"),
     fig_dir: Path = _FIG_DIR,
@@ -105,14 +107,38 @@ def run_validation(
     _savefig(plot_calibration_curve(y_test, y_pred_test, label="Test"), "calibration_test", fig_dir)
     _savefig(plot_calibration_curve(y_oot, y_pred_oot, label="OOT"), "calibration_oot", fig_dir)
 
-    # Fit calibrator if HL p-value < 0.05
-    calibrator = None
-    if test_cal["hl_pvalue"] < 0.05:
-        calibrator = fit_isotonic_calibrator(y_test, y_pred_test)
-        metrics["calibration"]["isotonic_applied"] = True
-        logger.info("Isotonic calibrator fitted and will be attached to scorecard.")
+    # ── Recalibration gate ────────────────────────────────────────────────────
+    # Triggered by OUT-OF-TIME evidence, fitted on the earlier half of the OOT window,
+    # and accepted only if it demonstrably improves the later half (which is never used
+    # for fitting). The previous gate tested the in-time partition, which cannot see the
+    # 2016-2018 era drift at all -- see docs/AUDIT.md finding A1.
+    if oot_order_key is None:
+        oot_order_key = np.arange(len(y_oot))
+    fit_mask = chronological_oot_split(oot_order_key, fit_fraction=0.5)
+    gate = select_oot_recalibrator(
+        y_fit=y_oot[fit_mask],
+        p_fit=y_pred_oot[fit_mask],
+        y_eval=y_oot[~fit_mask],
+        p_eval=y_pred_oot[~fit_mask],
+    )
+    calibrator = gate.pop("calibrator", None)
+    metrics["calibration"]["recalibration_gate"] = gate
+    # Back-compatible flag: True only when a transform is actually attached.
+    metrics["calibration"]["isotonic_applied"] = bool(
+        calibrator is not None and gate.get("chosen_method") == "isotonic"
+    )
+    metrics["calibration"]["recalibration_applied"] = calibrator is not None
+    if calibrator is None:
+        logger.info(
+            "No recalibrator attached (triggered=%s, accepted=%s): %s",
+            gate.get("triggered"), gate.get("accepted"),
+            gate.get("accept_reason") or gate.get("trigger_reason") or gate.get("skip_reason"),
+        )
     else:
-        metrics["calibration"]["isotonic_applied"] = False
+        logger.info(
+            "Recalibrator attached: %s fitted on the earlier OOT slice (%s)",
+            gate.get("chosen_method"), gate.get("accept_reason"),
+        )
 
     # ── Stability (PSI) ────────────────────────────────────────────────────────
     psi_test = compute_psi(y_pred_train, y_pred_test)

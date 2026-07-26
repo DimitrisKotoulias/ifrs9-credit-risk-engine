@@ -9,6 +9,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qa_checks import run_metric_checks, run_tex_checks  # noqa: E402
 
 
+
+def tex_escape(text: str) -> str:
+    """Escape LaTeX specials in a string that came from code, not from the template.
+
+    Critically this covers ``%``: an unescaped percent sign is a LaTeX comment, so it
+    silently deletes the remainder of the source line from the rendered PDF without any
+    error. A diagnostic string such as "ratio outside +/-10%" swallowed 737 characters of
+    the recalibration evidence in an earlier build (docs/AUDIT.md finding A1).
+    """
+    if not isinstance(text, str):
+        return text
+    replacements = [
+        ("\\", r"\textbackslash{}"),
+        ("&", r"\&"), ("%", r"\%"), ("$", r"\$"), ("#", r"\#"),
+        ("_", r"\_"), ("{", r"\{"), ("}", r"\}"),
+        ("~", r"\textasciitilde{}"), ("^", r"\textasciicircum{}"),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
 def render_latex():
     project_root = r"C:\Users\Δημητρης\OneDrive\Υπολογιστής\Credit Risk Project\credit-risk-ecl"
     metrics_path = os.path.join(project_root, "outputs", "metrics.json")
@@ -246,10 +268,10 @@ def render_latex():
             f"Hosmer-Lemeshow $p$ & $>0.05$ & {before.get('hl_pvalue', 0.0):.4f} & {after.get('hl_pvalue', 0.0):.4f} & {hl_flag} \\\\",
             r"\bottomrule",
             r"\multicolumn{5}{p{\linewidth}}{\footnotesize \checkmark\ marks a metric that moved \emph{toward} its target and $\times$ one that moved away. "
-            + r"Recalibration uses isotonic regression fitted \emph{out-of-sample} on the "
-            + f"{fit_on} partition and applied (transform only) to OOT; the OOT diagnostics above therefore reflect genuine "
-            + r"generalisation, not in-sample recalibration. Fitting the calibrator on the OOT set itself would trivially pass "
-            + r"the Hosmer-Lemeshow test and is deliberately avoided.} \\",
+            + r"This table is a fixed diagnostic, not the production gate: isotonic regression fitted on the "
+            + f"{fit_on} partition and applied (transform only) to the whole OOT set. The production "
+            + r"recalibration decision is made by the out-of-time gate described above, which fits inside the "
+            + r"OOT window and validates on a disjoint later slice of it.} \\",
             r"\end{tabular}",
             r"\end{table}",
         ]
@@ -1196,54 +1218,105 @@ def render_latex():
         metrics.get("calibration_comparison", {}).get("before", {}).get("actual_dr", 0.0)
     )
 
-    # ── Recalibration: was a calibrator actually attached to the production scorecard? ──
-    # The calibrator is fitted only when the IN-TIME TEST Hosmer-Lemeshow test rejects
-    # (validation/report.py). When it does not, production PD stays raw and the
-    # before/after table below is a standalone diagnostic, not a deployed transform.
-    _iso_applied = bool(metrics.get("calibration", {}).get("isotonic_applied", False))
-    if _iso_applied:
+    # ── Recalibration: what the out-of-time gate decided ────────────────────────
+    # The gate triggers on out-of-time evidence, fits on the earlier half of the OOT
+    # window and accepts only on demonstrated improvement in the later half. The prose
+    # below reports whichever branch actually fired (docs/AUDIT.md finding A1).
+    _gate = metrics.get("calibration", {}).get("recalibration_gate", {}) or {}
+    _applied = bool(metrics.get("calibration", {}).get("recalibration_applied", False))
+    _n_fit = f"{int(_gate.get('n_fit', 0)):,}"
+    _n_eval = f"{int(_gate.get('n_eval', 0)):,}"
+    _method = str(_gate.get("chosen_method", "none"))
+    _eb, _ea = _gate.get("eval_before", {}), _gate.get("eval_after", {})
+    # These are free text produced by the gate and may contain %, _, & etc.
+    _trigger_reason = tex_escape(str(_gate.get("trigger_reason", "")))
+    _skip_reason = tex_escape(str(_gate.get("skip_reason", "")))
+    _article = "an" if _method[:1].lower() in "aeiou" else "a"
+    _EM_A, _EM_B = "\\emph{", "}"
+    _gate_intro = (
+        "Recalibration is governed by an out-of-time gate. The OOT window is split "
+        f"chronologically: the earlier {_n_fit} loans form the fitting slice and the "
+        f"later {_n_eval} the evaluation slice. The gate " + _EM_A + "triggers" + _EM_B +
+        " on evidence of miscalibration in the fitting slice, " + _EM_A + "fits" + _EM_B +
+        " the candidate transform on that slice only, and " + _EM_A + "accepts" + _EM_B +
+        " it solely if it demonstrably improves calibration on the evaluation slice, "
+        "which is never used for fitting. Gating on the in-time partition instead would "
+        "be blind to the very era drift documented in Section~7.3 --- that test passes "
+        "comfortably --- while fitting on the evaluation slice would trivially pass "
+        "Hosmer-Lemeshow as an in-sample artefact. This design avoids both failure modes."
+    )
+
+    if not _gate:
+        recalib_status = _gate_intro
+        recalib_production_note = (
+            "assessed by the out-of-time recalibration gate (Section~7.2)"
+        )
+    elif _gate.get("skip_reason"):
         recalib_status = (
-            "Post-model recalibration (isotonic regression) was therefore fitted "
-            "\\emph{out-of-sample} on the in-time test partition and attached to the "
-            "production scorecard, and is applied to the OOT set below. Because the "
-            "calibrator is fitted on a different partition and only transferred to OOT, it "
-            "is \\emph{not} guaranteed to improve every OOT diagnostic: as "
-            "Table~\\ref{tab:calibration_comparison} shows, discrimination is essentially "
-            "unchanged and the calibration slope, intercept and expected default rate each "
-            "move slightly \\emph{away} from their targets on the OOT set. We deliberately "
-            "do \\emph{not} fit the recalibrator on the OOT set itself --- doing so would "
-            "trivially pass the Hosmer-Lemeshow test but would be an in-sample artefact. "
-            "Accordingly we retain the recalibrated PDs as an honest out-of-sample transform "
-            "rather than a certified calibration pass."
+            f"{_gate_intro} On this run the gate did not run: {_skip_reason}. "
+            "All reported PDs are therefore raw model output."
         )
         recalib_production_note = (
-            "corrected via the isotonic recalibration described therein for the scorecard's "
-            "\\textbf{12-month} PD, which feeds Expected Loss, Basel RWA, and SICR-origination "
-            "staging"
+            "not corrected in production: the recalibration gate could not run "
+            "(Section~7.2), so this under-prediction carries through untreated"
+        )
+    elif not _gate.get("triggered", False):
+        recalib_status = (
+            f"{_gate_intro} On this run the gate did " + _EM_A + "not" + _EM_B +
+            f" trigger ({_trigger_reason or 'no miscalibration detected'}), so "
+            "no transform was fitted and all reported PDs are raw model output."
+        )
+        recalib_production_note = (
+            "not corrected in production: the out-of-time gate did not trigger "
+            "(Section~7.2)"
+        )
+    elif _applied:
+        recalib_status = (
+            f"{_gate_intro} On this run the gate " + _EM_A + "triggered" + _EM_B +
+            f" ({_trigger_reason}), selected {_article} " + _EM_A + _method +
+            _EM_B + " transform by out-of-fold Brier score computed within the fitting "
+            "slice, and " + _EM_A + "accepted" + _EM_B + " it. On the held-out later "
+            "slice the predicted-to-actual ratio moves from "
+            f"{_eb.get('ratio', float('nan')):.3f} to "
+            f"{_ea.get('ratio', float('nan')):.3f}, the calibration intercept from "
+            f"{_eb.get('intercept', float('nan')):.4f} to "
+            f"{_ea.get('intercept', float('nan')):.4f}, and the Brier score from "
+            f"{_eb.get('brier', float('nan')):.4f} to "
+            f"{_ea.get('brier', float('nan')):.4f}. The transform " + _EM_A + "is" +
+            _EM_B + " attached to the production scorecard, so the PDs feeding Expected "
+            "Loss, Basel RWA and IFRS~9 staging are recalibrated. Because every one of "
+            "those improvements is measured on vintages excluded from the fit, this is "
+            "an out-of-sample result rather than an in-sample artefact."
+        )
+        recalib_production_note = (
+            f"corrected in production by the {_method} transform that the out-of-time "
+            "gate accepted (Section~7.2), applied to the scorecard's 12-month PD feeding "
+            "Expected Loss, Basel RWA and SICR staging"
         )
     else:
         recalib_status = (
-            "A post-model recalibrator is fitted only when the \\emph{in-time test} "
-            "Hosmer-Lemeshow test rejects, so that the transform is always estimated "
-            "out-of-sample relative to OOT. On this run the in-time test does \\emph{not} "
-            f"reject ($p = {hl_pvalue_test} > 0.05$), so \\textbf{{no calibrator is attached "
-            "to the production scorecard and all reported PDs --- including those feeding "
-            "Expected Loss, Basel RWA and IFRS~9 staging --- are raw, uncalibrated model "
-            "output}. Table~\\ref{tab:calibration_comparison} is therefore a "
-            "\\emph{diagnostic}: it fits an isotonic transform on the in-time test partition "
-            "and reports what it \\emph{would} do to the OOT diagnostics if deployed. It is "
-            "not deployed, and on these figures it would not help --- discrimination is "
-            "essentially unchanged and the calibration slope, intercept and expected default "
-            "rate each move \\emph{away} from their targets. We deliberately do \\emph{not} "
-            "fit the recalibrator on the OOT set itself --- doing so would trivially pass the "
-            "Hosmer-Lemeshow test but would be an in-sample artefact."
+            f"{_gate_intro} On this run the gate " + _EM_A + "triggered" + _EM_B +
+            f" ({_trigger_reason}) and {_article} " + _EM_A + _method + _EM_B +
+            " transform was fitted on the earlier slice --- but it was " + _EM_A +
+            "rejected" + _EM_B + ": on the held-out later slice the predicted-to-actual "
+            f"ratio moves from {_eb.get('ratio', float('nan')):.3f} to "
+            f"{_ea.get('ratio', float('nan')):.3f} and the Brier score from "
+            f"{_eb.get('brier', float('nan')):.4f} to "
+            f"{_ea.get('brier', float('nan')):.4f}, which does not clear the acceptance "
+            "test. No calibrator is attached, and all reported PDs --- including those "
+            "feeding Expected Loss, Basel RWA and IFRS~9 staging --- are raw model "
+            "output. We report the rejection rather than deploying a transform that does "
+            "not generalise: the drift is real and documented in Section~7.3, but a "
+            "monotone rescaling fitted on earlier vintages failing to transfer to later "
+            "ones is itself evidence that the miscalibration is not a stable level shift."
         )
         recalib_production_note = (
-            "quantified by the era-specific diagnostic below, but \\emph{not} corrected in "
-            "production: no recalibrator is attached (Section~7.2), so this under-prediction "
-            "carries through untreated into Expected Loss, Basel RWA and SICR-origination "
-            "staging for the scorecard's \\textbf{12-month} PD"
+            "not corrected in production: the out-of-time gate fitted a candidate "
+            "transform and rejected it for failing to generalise to the held-out later "
+            "vintages (Section~7.2), so this under-prediction carries through untreated "
+            "into Expected Loss, Basel RWA and SICR staging"
         )
+
 
     # ── Stage migration ────────────────────────────────────────────────────────
     _mig = metrics.get("ifrs9_stage_migration", {})
@@ -1862,7 +1935,7 @@ Model validation is performed on the completely held-out Out-of-Time (OOT) datas
 \end{figure}
 
 \subsection{Calibration Robustness}
-Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{__HL_PVALUE__}} < 0.05$). Given the very large sample size ($N = \text{VAR_N_OOT}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. __RECALIB_STATUS__ The residual higher-decile underprediction carries through to the ECL provisions and is listed among the known limitations in Section~10.
+Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{__HL_PVALUE__}} < 0.05$). Given the very large sample size ($N = \text{VAR_N_OOT}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. __RECALIB_STATUS__ __RECALIB_RESIDUAL_NOTE__
 
 __CALIBRATION_COMPARISON_TABLE__
 
@@ -1912,7 +1985,7 @@ __PD_BACKTEST_ROWS__
 \end{table}
 
 \subsubsection*{Era-Specific Recalibration of the Vintage Drift}
-A single global recalibrator cannot correct an era-specific bias. We therefore fit separate isotonic and Platt recalibrators for the pre-2016 and 2016--2018 eras and measure, per vintage group, the raw and recalibrated PD ratio against the realised default rate (Table~\ref{tab:vintage_calib}, Figure~\ref{fig:vintage_calib}). The raw ratio is materially below $1.0$ for the newer vintages (the documented under-prediction), and the era-specific isotonic recalibration moves it back toward $1.0$. This is an in-sample diagnostic that quantifies the drift and demonstrates the correction; production PD is unchanged. Since the era-specific calibrators are fitted and evaluated on the same vintage partitions (e.g. 2016--2018), the resulting alignment (Isotonic/Platt PD equals the Actual DR of 25.27% exactly) is in-sample and tautological: it is a diagnostic baseline that demonstrates the extent of the raw model's drift, not a validation of the recalibrator's out-of-sample generalization.
+A single global recalibrator cannot correct an era-specific bias. We therefore fit separate isotonic and Platt recalibrators for the pre-2016 and 2016--2018 eras and measure, per vintage group, the raw and recalibrated PD ratio against the realised default rate (Table~\ref{tab:vintage_calib}, Figure~\ref{fig:vintage_calib}). The raw ratio is materially below $1.0$ for the newer vintages (the documented under-prediction), and the era-specific isotonic recalibration moves it back toward $1.0$. This is an in-sample diagnostic that quantifies the drift and demonstrates the correction; production PD is unchanged. Since the era-specific calibrators are fitted and evaluated on the same vintage partitions (e.g. 2016--2018), the resulting alignment (Isotonic/Platt PD equals the Actual DR exactly) is in-sample and tautological: it is a diagnostic baseline that demonstrates the extent of the raw model's drift, not a validation of the recalibrator's out-of-sample generalization.
 
 __VINTAGE_CALIB_TABLE__
 
@@ -2166,10 +2239,9 @@ In other words, the headline ECL is, to first order, \emph{realised defaults} $\
     \item \textbf{Hazard-model event timing:} The discrete-time hazard model is fitted on a person-period panel in which every default event is placed in the loan's \emph{final} month, because the data records no observed default date, and no censoring is applied. The estimated months-on-book slope is therefore partly an artefact of this construction, and that term structure is what drives the ECL sum.
     \item \textbf{Portfolio aggregates are partly in-sample:} Expected Loss, Basel RWA and IFRS~9 ECL are computed over the combined train, in-time test and OOT partitions --- the same rows the scorecard, hazard and LGD models were fitted on. This is appropriate for provisioning a closed book but means the portfolio aggregates are not out-of-sample quantities; the out-of-sample evidence is the OOT discrimination and calibration in Section~7.
     \item \textbf{Constant exposure inside the ECL sum:} $\text{LGD}(t)$ and $\text{EAD}(t)$ are held at their per-loan point estimates across the ECL horizon rather than re-amortised monthly, which is conservative for amortising loans.
-    \item \textbf{Degenerate macro scenario axes:} The Federal Funds Rate floors at 0.10\% in \emph{both} the upside and downside scenarios, so the two are identical on that axis, and CPI inflation carries no scenario delta at all (it sits at the sample mean in all three). Combined with the imposed positive sign prior on FEDFUNDS, a modelled recession --- which in practice brings rate cuts --- \emph{reduces} projected defaults through that channel. Only unemployment, GDP growth and house-price growth differentiate the scenarios materially.
+    \item \textbf{The adverse scenario is a rate-and-inflation shock, not a lower-bound recession:} Every macro axis moves in the direction its imposed sign prior says raises defaults (downside) or lowers them (upside), so the required Downside $>$ Baseline $>$ Upside ordering holds \emph{by construction} for any non-negative coefficient magnitudes rather than depending on the fitted values. The consequence is that the downside tightens policy and raises inflation into the downturn. This is a deliberate choice: it is the more punitive configuration for an unsecured consumer book, where floating debt-service costs and a real-income squeeze compound the unemployment shock, and it matches how supervisory adverse scenarios are typically built. A deflationary lower-bound recession, in which policy is cut, would instead \emph{offset} part of the adverse shock through the rate channel and is not modelled here.
     \item \textbf{The ``baseline'' scenario maps to $Z = $ __BASELINE_Z__, not $Z=0$:} This is a property of the Vasicek conditional-PD function, whose value at $Z=0$ does not equal the unconditional PD; the projection intercept is recentred so the baseline reproduces the through-the-cycle default rate. Under the report-wide convention that $Z<0$ is adverse, the baseline therefore reads as mildly adverse even though it is the central expectation.
     \item \textbf{Categorical Feature Encoding:} Grade, term, employment length and home ownership are ordinal-encoded before WoE binning. Label ordering assumptions (e.g., A=1 through G=7) are reasonable but should be validated against observed default rates for each category.
-    \item \textbf{DPD Roll-Rate Analysis (future work):} A monthly delinquency-bucket roll-rate transition matrix, the standard IFRS~9 monitoring-committee tool, is not produced here because the LendingClub accepted-loan file is loan-level with no monthly days-past-due panel. Building genuine roll-rates requires a monthly servicing snapshot feed, which is the recommended data extension for a production deployment.
 \end{itemize}
 
 \subsection{Empirical Results vs.\ Published Literature}
@@ -2318,6 +2390,15 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__TRAIN_GOOD_RATE__", train_good_rate)
     latex_content = latex_content.replace("__OOT_BAD_RATE__", oot_bad_rate)
     # Recalibration narrative — reflects whether a calibrator was actually attached (audit A1)
+    recalib_residual_note = (
+        "Note that the IFRS 9 lifetime PD is produced by the separate hazard model and "
+        "is not passed through this transform (Section~6.2), so the ECL provisions do "
+        "not inherit the correction; the known limitations in Section~10 still apply."
+        if _applied else
+        "The residual higher-decile underprediction therefore carries through to the "
+        "ECL provisions and is listed among the known limitations in Section~10."
+    )
+    latex_content = latex_content.replace("__RECALIB_RESIDUAL_NOTE__", recalib_residual_note)
     latex_content = latex_content.replace("__RECALIB_STATUS__", recalib_status)
     latex_content = latex_content.replace("__RECALIB_PRODUCTION_NOTE__", recalib_production_note)
     latex_content = latex_content.replace("__DOWNTURN_NOTE__", downturn_note)

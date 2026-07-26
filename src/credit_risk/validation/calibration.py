@@ -173,6 +173,210 @@ def fit_platt_calibrator(
     return cal
 
 
+# ── Out-of-time recalibration gate ───────────────────────────────────────────────
+# The original gate fired on the *in-time test* Hosmer-Lemeshow p-value, then fitted on
+# that same partition. That tests the wrong thing: the calibration failure on this book is
+# an out-of-time era drift (2016-2018 vintages under-predicted by ~35%), which the in-time
+# test cannot see -- it passed at p = 0.13, so no calibrator was ever attached while the
+# report claimed one was (docs/AUDIT.md finding A1).
+#
+# The replacement mirrors how recalibration is actually governed in a bank:
+#
+#   1. TRIGGER on out-of-time evidence, not in-time evidence.
+#   2. FIT on the earlier part of the out-of-time window -- data that would genuinely be
+#      closed and available at a deployment decision date.
+#   3. ACCEPT only if the fitted transform demonstrably improves calibration on the LATER,
+#      disjoint part of the window, which was never used for fitting.
+#
+# Fitting on the reporting slice would trivially pass Hosmer-Lemeshow and is exactly the
+# in-sample artefact the previous design was trying to avoid; splitting the window
+# chronologically keeps that protection while letting the gate see the drift at all.
+
+_RECALIB_MIN_SLICE = 500  # below this the split is not informative; skip recalibration
+
+
+def _calibration_ratio(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Predicted-to-actual default-rate ratio (1.0 = calibrated in aggregate)."""
+    actual = float(np.mean(y_true))
+    if actual <= 0:
+        return float("nan")
+    return float(np.mean(y_pred)) / actual
+
+
+def _apply_calibrator(calibrator: object, p_raw: np.ndarray) -> np.ndarray:
+    """Apply either an isotonic or a Platt calibrator to raw probabilities."""
+    p_raw = np.asarray(p_raw, dtype=float)
+    if hasattr(calibrator, "predict_proba"):
+        out = calibrator.predict_proba(p_raw.reshape(-1, 1))[:, 1]
+    else:
+        out = calibrator.transform(p_raw)
+    return np.clip(out, 1e-8, 1 - 1e-8)
+
+
+def _cv_brier(kind: str, y: np.ndarray, p: np.ndarray, n_folds: int = 3, seed: int = 42) -> float:
+    """Out-of-fold Brier score for a calibrator family, estimated within one slice.
+
+    Used to choose between isotonic and Platt without consulting the evaluation slice,
+    so the choice itself cannot be tuned on the data used to accept or report.
+    """
+    from sklearn.model_selection import StratifiedKFold  # noqa: PLC0415
+
+    y = np.asarray(y, dtype=float)
+    p = np.asarray(p, dtype=float)
+    if len(np.unique(y)) < 2:
+        return float("inf")
+    fitter = fit_isotonic_calibrator if kind == "isotonic" else fit_platt_calibrator
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    errors: list[float] = []
+    for tr_idx, te_idx in skf.split(p.reshape(-1, 1), y.astype(int)):
+        if len(np.unique(y[tr_idx])) < 2:
+            continue
+        cal = fitter(y[tr_idx], p[tr_idx])
+        errors.append(float(np.mean((_apply_calibrator(cal, p[te_idx]) - y[te_idx]) ** 2)))
+    return float(np.mean(errors)) if errors else float("inf")
+
+
+def select_oot_recalibrator(
+    y_fit: np.ndarray,
+    p_fit: np.ndarray,
+    y_eval: np.ndarray,
+    p_eval: np.ndarray,
+    hl_alpha: float = 0.05,
+    ratio_tol: float = 0.10,
+    seed: int = 42,
+) -> dict:
+    """Trigger, fit and accept a recalibrator using a chronological out-of-time split.
+
+    Parameters
+    ----------
+    y_fit, p_fit:
+        Earlier out-of-time slice. Drives both the trigger decision and the fit.
+    y_eval, p_eval:
+        Later out-of-time slice, disjoint from the above. Used only to decide whether the
+        fitted transform generalises, and to report the improvement.
+    hl_alpha:
+        Hosmer-Lemeshow significance level for the trigger.
+    ratio_tol:
+        Aggregate predicted/actual tolerance for the trigger (0.10 = +/-10%).
+
+    Returns
+    -------
+    dict
+        ``calibrator`` is the transform to attach (None if not accepted), alongside the
+        full decision trail: whether recalibration was triggered and why, which family was
+        chosen, and the before/after calibration metrics on the evaluation slice.
+    """
+    y_fit = np.asarray(y_fit, dtype=float)
+    p_fit = np.asarray(p_fit, dtype=float)
+    y_eval = np.asarray(y_eval, dtype=float)
+    p_eval = np.asarray(p_eval, dtype=float)
+
+    out: dict = {
+        "gate": "out_of_time_chronological_split",
+        "n_fit": int(len(y_fit)),
+        "n_eval": int(len(y_eval)),
+        "calibrator": None,
+        "triggered": False,
+        "accepted": False,
+        "chosen_method": "none",
+    }
+
+    if len(y_fit) < _RECALIB_MIN_SLICE or len(y_eval) < _RECALIB_MIN_SLICE:
+        out["skip_reason"] = (
+            f"out-of-time slices too small to split "
+            f"(fit={len(y_fit)}, eval={len(y_eval)}, min={_RECALIB_MIN_SLICE})"
+        )
+        return out
+    if len(np.unique(y_fit)) < 2 or len(np.unique(y_eval)) < 2:
+        out["skip_reason"] = "an out-of-time slice contains a single class"
+        return out
+
+    # 1. Trigger on out-of-time evidence.
+    fit_cal = compute_calibration(y_fit, p_fit, label="oot_fit")
+    fit_ratio = _calibration_ratio(y_fit, p_fit)
+    hl_rejects = bool(fit_cal["hl_pvalue"] < hl_alpha)
+    ratio_off = bool(abs(fit_ratio - 1.0) > ratio_tol)
+    out.update({
+        "trigger_hl_pvalue": float(fit_cal["hl_pvalue"]),
+        "trigger_ratio": float(fit_ratio),
+        "triggered": hl_rejects or ratio_off,
+    })
+    reasons = []
+    if hl_rejects:
+        reasons.append(f"Hosmer-Lemeshow rejects on the fitting slice (p={fit_cal['hl_pvalue']:.4f})")
+    if ratio_off:
+        reasons.append(f"aggregate predicted/actual ratio {fit_ratio:.3f} outside +/-{ratio_tol:.0%}")
+    out["trigger_reason"] = "; ".join(reasons) if reasons else "no out-of-time miscalibration detected"
+    if not out["triggered"]:
+        return out
+
+    # 2. Choose the family by out-of-fold Brier *within* the fitting slice only.
+    cv = {k: _cv_brier(k, y_fit, p_fit, seed=seed) for k in ("isotonic", "platt")}
+    chosen = min(cv, key=lambda k: cv[k])
+    out["cv_brier_fit_slice"] = {k: float(v) for k, v in cv.items()}
+    out["chosen_method"] = chosen
+
+    calibrator = (fit_isotonic_calibrator if chosen == "isotonic" else fit_platt_calibrator)(
+        y_fit, p_fit
+    )
+
+    # 3. Accept only on demonstrated improvement on the untouched later slice.
+    p_eval_cal = _apply_calibrator(calibrator, p_eval)
+    before_ratio, after_ratio = _calibration_ratio(y_eval, p_eval), _calibration_ratio(y_eval, p_eval_cal)
+    before_brier = float(np.mean((p_eval - y_eval) ** 2))
+    after_brier = float(np.mean((p_eval_cal - y_eval) ** 2))
+    before_int, before_slope = compute_calibration_intercept_slope(y_eval, p_eval)
+    after_int, after_slope = compute_calibration_intercept_slope(y_eval, p_eval_cal)
+
+    ratio_improves = abs(after_ratio - 1.0) < abs(before_ratio - 1.0)
+    brier_not_worse = after_brier <= before_brier + 1e-6
+    accepted = bool(ratio_improves and brier_not_worse)
+
+    out.update({
+        "eval_before": {
+            "ratio": float(before_ratio), "brier": before_brier,
+            "intercept": float(before_int), "slope": float(before_slope),
+        },
+        "eval_after": {
+            "ratio": float(after_ratio), "brier": after_brier,
+            "intercept": float(after_int), "slope": float(after_slope),
+        },
+        "accepted": accepted,
+        "accept_reason": (
+            f"calibration ratio moved {before_ratio:.3f} -> {after_ratio:.3f} toward 1.0 "
+            f"with Brier {before_brier:.4f} -> {after_brier:.4f}"
+            if accepted else
+            f"rejected: ratio {before_ratio:.3f} -> {after_ratio:.3f}, "
+            f"Brier {before_brier:.4f} -> {after_brier:.4f} on the held-out later slice"
+        ),
+        "calibrator": calibrator if accepted else None,
+    })
+    logger.info(
+        "OOT recalibration gate: triggered=%s chosen=%s accepted=%s (%s)",
+        out["triggered"], chosen, accepted, out["accept_reason"],
+    )
+    return out
+
+
+def chronological_oot_split(
+    order_key: np.ndarray,
+    fit_fraction: float = 0.5,
+) -> np.ndarray:
+    """Boolean mask selecting the earlier ``fit_fraction`` of the out-of-time window.
+
+    ``order_key`` is any sortable per-row value (issue date). Ties are kept together on the
+    fitting side so a vintage is never split across the two slices.
+    """
+    order = pd.Series(order_key)
+    if order.isna().all():
+        n_fit = int(len(order) * fit_fraction)
+        mask = np.zeros(len(order), dtype=bool)
+        mask[:n_fit] = True
+        return mask
+    cutoff = order.quantile(fit_fraction)
+    return (order <= cutoff).to_numpy(dtype=bool)
+
+
 _DEFAULT_VINTAGE_GROUPS: list[tuple[str, int, int]] = [
     ("2007-2012", 2007, 2012),
     # Training population is loans originated prior to January 2015, so there are no

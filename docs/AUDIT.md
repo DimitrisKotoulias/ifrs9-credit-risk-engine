@@ -514,3 +514,110 @@ still dominates, and the C1 conclusion is unchanged — it is simply measured mo
 - `pytest tests/` — 247 passed (including 11 new regression tests).
 - `reports/qa_checks.py` — all checks pass, 85 metric keys audited.
 - `xelatex` — 4-pass build, **0 LaTeX errors**, 0 undefined references or citations, 39 pages.
+
+---
+
+## Round 2 — recalibration gate, scenario design, and a silent LaTeX truncation
+
+### A1 revisited · the gate now tests the right thing
+
+The Round-1 fix made the report *honest* about the fact that no recalibrator was attached.
+It did not fix the underlying gate, which still decided on the **in-time test** partition
+while the miscalibration lives **out-of-time**. Simply repointing it at OOT would have been
+worse: fitting on the partition you then report on trivially passes Hosmer-Lemeshow, which
+is the in-sample artefact the original design was trying to avoid.
+
+`select_oot_recalibrator` (`validation/calibration.py`) implements the governance sequence
+a bank would actually use:
+
+1. **Split** the OOT window chronologically — earlier half fits, later half validates.
+2. **Trigger** on out-of-time evidence in the fitting slice (HL rejects, or aggregate
+   predicted/actual outside ±10%).
+3. **Fit** on that slice only. Choose isotonic vs Platt by *out-of-fold* Brier **within**
+   the fitting slice, so even the family choice never sees the evaluation data.
+4. **Accept** only on demonstrated improvement in the later slice, which was never fitted.
+
+On this run the gate triggered, chose isotonic, and **accepted**:
+
+| On the held-out later slice | before | after |
+|---|---:|---:|
+| predicted / actual ratio | 0.690 | **0.998** |
+| calibration intercept | 0.5365 | **0.0120** |
+| Brier score | 0.1800 | **0.1727** |
+
+Every diagnostic moves toward target, measured on vintages excluded from the fit. The
+documented 2016–2018 under-prediction is now genuinely corrected in production rather than
+merely described. Consequences: `total_el` **+41.9%** ($1.63bn → $2.32bn) and `total_rwa`
+**+10.2%**, because the PDs feeding them are no longer understated. OOT AUC is unchanged at
+0.6988 — isotonic is monotone, so ranking is preserved.
+
+The superseded Platt-vs-isotonic shootout in `pipeline.py` was removed: it fitted Platt on
+**train** and scored it against raw PDs on **test**, the wrong evidence for an out-of-time
+drift, and could attach a transform the gate had rejected.
+
+### C5 revisited · scenario ordering now holds by construction
+
+Two defects, not one. The degeneracy (FEDFUNDS floored to 0.1 in *both* scenarios,
+CPI_inflation constant across all three) was the visible one. The deeper problem was **sign
+incoherence**: the downside *cut* rates while the imposed sign prior says higher rates raise
+defaults, so the adverse scenario partially offset itself — and whether
+`Downside ≥ Baseline ≥ Upside` still held depended on the fitted coefficient magnitudes. A
+different sample could have inverted it silently.
+
+Every axis now moves in the direction its sign prior says raises defaults (downside) or
+lowers them (upside), so the ordering is structural. A property test asserts it over 200
+random coefficient draws.
+
+| Axis | Upside | Downside |
+|---|---:|---:|
+| UNRATE | 6.63 | 10.63 |
+| GDP_growth | 1.74 | −2.26 |
+| FEDFUNDS | 0.25 | 2.50 |
+| CPI_inflation | 0.28 | 1.93 |
+| HPI_growth | 1.88 | −8.12 |
+
+Implied default rates: upside 12.05%, baseline 17.09%, downside 36.67%. The adverse
+scenario is now a **rate-and-inflation shock recession** rather than a deflationary
+lower-bound one — a deliberate, disclosed modelling choice, and the more punitive
+configuration for an unsecured consumer book.
+
+### A21 · High · Unescaped `%` silently truncated the PDF
+
+Found by a guard added while fixing A1, and it turned out to predate this audit.
+
+A percent sign is a LaTeX comment. Because the template emits each paragraph as a single
+source line, one stray `%` deletes everything after it on that line — with **no error and
+no warning**. `xelatex` reported a clean build throughout.
+
+Two occurrences:
+
+| Location | Dropped |
+|---|---:|
+| §7.2, from the gate's own `trigger_reason` (`"ratio 0.693 outside +/-10%"`) | 737 chars — the entire recalibration evidence |
+| §7.4, literal `Actual DR of 25.27%` in the template | 192 chars — the in-sample/tautological caveat |
+
+The second had been silently missing from every shipped PDF. Fixes: a `tex_escape()` helper
+applied to all strings injected from Python, the literal corrected, and
+`check_no_unescaped_percent` added to the QA layer — it fails the build on any inline
+unescaped `%`, ignoring legitimate whole-line comments.
+
+This is the same defect class the audit exists to catch: the code was right, the reader saw
+something else, and nothing in the toolchain complained.
+
+### Also in this round
+
+- Removed the "DPD Roll-Rate Analysis (future work)" bullet from §10 at the author's request.
+- `metrics.json` gains `recalibration_gate` (full decision trail), `recalibration_applied`,
+  and `degenerate_scenario_axes`.
+- Two new QA guards: `check_scenario_axes_separate`, `check_no_unescaped_percent`.
+  `check_recalibration_applied` now also asserts that `recalibration_gate.accepted` agrees
+  with what was actually attached.
+- Regression tests: **256 passed** (was 247). Nine new — gate triggers / does not trigger /
+  accepts only on improvement / never leaks the evaluation slice / chronological split /
+  skips on small slices, plus the two scenario-invariant tests.
+
+### Build state
+
+- `pytest tests/` — 256 passed.
+- `reports/qa_checks.py` — all checks pass, 85 metric keys audited.
+- `xelatex` — 4-pass, 0 LaTeX errors, 0 undefined references, and now **0 unescaped `%`**.

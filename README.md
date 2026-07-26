@@ -28,13 +28,13 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 | PSI (train → OOT) | 0.003 |
 | Mean LGD (OOS-selected model) | 0.893 |
 | Downturn LGD (p90) | 1.000 |
-| Portfolio EL | $1.63bn |
-| Total RWA (IRB) | $19.59bn |
-| RWA density | 207.5% |
-| Total IFRS 9 ECL | $2.37bn |
-| ECL coverage | 25.1% |
+| Portfolio EL | $2.32bn |
+| Total RWA (IRB) | $21.59bn |
+| RWA density | 228.8% |
+| Total IFRS 9 ECL | $2.39bn |
+| ECL coverage | 25.3% |
 | Stage 2 / Stage 3 share | 29.4% / 21.5% |
-| Operating cut-off | score 530 (61.4% approval, 13.8% bad rate, RAROC -34.1%) |
+| Operating cut-off | score 530 (61.4% approval, 13.8% bad rate, RAROC -63.1%) |
 <!-- METRICS:END -->
 
 > The recommended operating cutoff is the most inclusive score that keeps the

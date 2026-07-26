@@ -533,12 +533,51 @@ _MACRO_SIGN_PRIORS = {
 _ALL_MACRO_COLS = ["UNRATE", "GDP_growth", "FEDFUNDS", "CPI_inflation", "HPI_growth"]
 
 # Per-scenario macro deltas applied on top of the sample-mean baseline.
-# (UNRATE/GDP_growth/FEDFUNDS deltas below mirror the pre-existing inline
-# logic; HPI_growth deltas are new.)
+#
+# Two defects were fixed here (docs/AUDIT.md finding C5):
+#
+#   1. DEGENERACY. Both scenarios previously moved FEDFUNDS *down* (-0.5 and -1.5) from a
+#      sample mean of ~0.50. With the 0.1 effective-lower-bound floor applied below, that
+#      put the policy rate at exactly 0.1 in the upside AND the downside, so the rate axis
+#      contributed nothing to scenario separation. CPI_inflation had no delta at all and
+#      sat at the sample mean in all three scenarios.
+#
+#   2. SIGN INCOHERENCE. The projection coefficients carry imposed economic sign priors
+#      (_MACRO_SIGN_PRIORS): rising unemployment, policy rates and inflation raise
+#      defaults; rising growth and house prices lower them. A downside that *cut* rates
+#      therefore reduced modelled defaults through the rate channel -- an adverse scenario
+#      partially offsetting itself. Worse, it made the required
+#      Downside >= Baseline >= Upside ordering depend on the fitted coefficient
+#      magnitudes, so a different sample could silently invert it.
+#
+# The deltas below move every axis in the direction its sign prior says raises (downside)
+# or lowers (upside) defaults, which makes the scenario ordering hold BY CONSTRUCTION for
+# any non-negative coefficient magnitudes, not by luck.
+#
+# The resulting adverse scenario is a rate-and-inflation shock recession -- unemployment
+# and inflation up, policy tightening into the downturn, growth and house prices down --
+# rather than a deflationary lower-bound recession. That is a deliberate modelling choice:
+# it is the more punitive configuration for an unsecured consumer book, where floating
+# debt-service costs and a real-income squeeze both bite, and it matches how supervisory
+# adverse scenarios are typically constructed. It is stated in the report's assumptions.
 _SCENARIO_DELTAS = {
-    "upside": {"UNRATE": -1.0, "GDP_growth": +1.0, "FEDFUNDS": -0.5, "HPI_growth": +2.0},
-    "downside": {"UNRATE": +3.0, "GDP_growth": -3.0, "FEDFUNDS": -1.5, "HPI_growth": -8.0},
+    "upside": {
+        "UNRATE": -1.0, "GDP_growth": +1.0, "FEDFUNDS": -0.25,
+        "CPI_inflation": -0.15, "HPI_growth": +2.0,
+    },
+    "downside": {
+        "UNRATE": +3.0, "GDP_growth": -3.0, "FEDFUNDS": +2.0,
+        "CPI_inflation": +1.5, "HPI_growth": -8.0,
+    },
 }
+
+
+def _scenario_axes_are_separated(upside: dict, downside: dict, cols: list[str]) -> list[str]:
+    """Axes on which the two scenarios are numerically identical (should be empty)."""
+    return [
+        c for c in cols
+        if abs(float(upside.get(c, 0.0)) - float(downside.get(c, 0.0))) < 1e-9
+    ]
 
 
 def fit_macro_model(
@@ -655,8 +694,12 @@ def fit_macro_model(
             upside_macro[k] += delta
     if "UNRATE" in upside_macro:
         upside_macro["UNRATE"] = max(2.0, upside_macro["UNRATE"])
+    # Effective lower bound on the policy rate; the upside eases only mildly so this
+    # floor must not bind, or the rate axis collapses onto the downside again.
     if "FEDFUNDS" in upside_macro:
         upside_macro["FEDFUNDS"] = max(0.1, upside_macro["FEDFUNDS"])
+    if "CPI_inflation" in upside_macro:
+        upside_macro["CPI_inflation"] = max(0.0, upside_macro["CPI_inflation"])
 
     downside_macro = baseline_macro.copy()
     for k, delta in _SCENARIO_DELTAS["downside"].items():
@@ -664,6 +707,15 @@ def fit_macro_model(
             downside_macro[k] += delta
     if "FEDFUNDS" in downside_macro:
         downside_macro["FEDFUNDS"] = max(0.1, downside_macro["FEDFUNDS"])
+
+    # A scenario axis that cannot separate upside from downside is dead weight in the ECL,
+    # and was shipped unnoticed once already.
+    degenerate_axes = _scenario_axes_are_separated(upside_macro, downside_macro, macro_cols)
+    if degenerate_axes:
+        logger.warning(
+            "Macro scenario axes identical in upside and downside after flooring: %s. "
+            "These variables contribute nothing to scenario separation.", degenerate_axes,
+        )
 
     # Predict default rates under each scenario using the sign-adjusted, recentred
     # coefficients (guarantees Downside > Baseline > Upside ordering, baseline = TTC).
@@ -690,6 +742,8 @@ def fit_macro_model(
         "macro_unrate_lag": lag_used,               # quarters of macro lag actually applied
         "r_squared": float(model.rsquared),
         "predictions": {"baseline": dr_base, "upside": dr_up, "downside": dr_down},
+        # Axes on which upside and downside are numerically identical (should be empty).
+        "degenerate_scenario_axes": degenerate_axes,
         # Scenario input assumptions, exported for the report (Fix 1.3)
         "scenario_inputs": {
             "baseline": baseline_macro,
