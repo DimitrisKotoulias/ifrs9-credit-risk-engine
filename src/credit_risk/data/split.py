@@ -27,7 +27,13 @@ class DataSplit:
     train: pd.DataFrame
     test: pd.DataFrame    # in-time holdout (random subset of train period)
     oot: pd.DataFrame     # out-of-time (most recent vintages)
-    full_accepted: pd.DataFrame | None = None  # pre-leakage-filtered data for LGD/EAD
+    # Pre-leakage-filtered data for LGD/EAD. NOTE: this is the accepted book *after* the
+    # target definition has dropped indeterminate statuses, so len(full_accepted) is the
+    # resolved-outcome population, NOT the raw file row count. Use `n_accepted_file` for
+    # the latter — conflating the two is what put a stale figure in the report abstract
+    # (docs/AUDIT.md finding A5).
+    full_accepted: pd.DataFrame | None = None
+    n_accepted_file: int = 0  # rows read from the accepted-loans source file
 
     def __repr__(self) -> str:
         return (
@@ -77,7 +83,11 @@ def time_split(
 
     train_mask = issue_dt < train_cutoff
     oot_mask = issue_dt >= oot_cutoff
-    # Between train_cutoff and oot_cutoff is "grey zone" — excluded (immature at OOT time)
+    # Between train_cutoff and oot_cutoff is a deliberately excluded "grey zone": those
+    # vintages share the training window's underwriting regime yet are still immature at
+    # the snapshot date, so they belong to neither partition and are dropped from the
+    # modelling population entirely. With the shipped config that is the whole 2015
+    # origination cohort — the report discloses this in the split section.
 
     train_pool = df[train_mask].copy()
     oot = df[oot_mask].copy()
@@ -108,12 +118,34 @@ def _assert_no_overlap(
     oot: pd.DataFrame,
     issue_dt: pd.Series,
 ) -> None:
-    """Assert train/test share no rows with OOT."""
-    train_test_idx = set(train.index) | set(test.index)
-    oot_idx = set(oot.index)
-    overlap = train_test_idx & oot_idx
-    if overlap:
+    """Assert the partitions share no rows and are genuinely separated in time.
+
+    An index-set comparison alone is vacuous: train/test and OOT are built from mutually
+    exclusive date masks, so their indices can never intersect and the check can never
+    fail (docs/AUDIT.md finding C7). The temporal assertion below is the one that can
+    actually catch a leakage bug.
+    """
+    train_idx, test_idx, oot_idx = set(train.index), set(test.index), set(oot.index)
+
+    for name, a, b in (
+        ("train/test", train_idx, test_idx),
+        ("train/OOT", train_idx, oot_idx),
+        ("test/OOT", test_idx, oot_idx),
+    ):
+        overlap = a & b
+        if overlap:
+            raise RuntimeError(
+                f"{name} partitions share {len(overlap)} rows. This is a data leakage bug."
+            )
+
+    # Temporal separation: the newest development vintage must precede the oldest OOT one.
+    dev_idx = train_idx | test_idx
+    if not dev_idx or not oot_idx:
+        return
+    dev_max = issue_dt.loc[sorted(dev_idx)].max()
+    oot_min = issue_dt.loc[sorted(oot_idx)].min()
+    if pd.notna(dev_max) and pd.notna(oot_min) and dev_max >= oot_min:
         raise RuntimeError(
-            f"OOT split has {len(overlap)} rows overlapping with train/test. "
-            "This is a data leakage bug."
+            f"Temporal leakage: newest development vintage ({dev_max:%Y-%m}) is not before "
+            f"the oldest OOT vintage ({oot_min:%Y-%m})."
         )

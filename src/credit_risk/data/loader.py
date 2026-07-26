@@ -226,6 +226,10 @@ def load_and_prepare(cfg: Config | None = None) -> tuple[DataSplit, pd.DataFrame
             if sort_cols_rej:
                 rejected = rejected.sort_values(by=sort_cols_rej).reset_index(drop=True)
 
+    # Row count as read from the source file, before the target definition drops loans
+    # with indeterminate status. Reported separately from the resolved-outcome population.
+    n_accepted_file = len(accepted)
+
     # Target definition
     accepted = define_target(accepted, cfg.target)
 
@@ -240,6 +244,7 @@ def load_and_prepare(cfg: Config | None = None) -> tuple[DataSplit, pd.DataFrame
     # OOT split
     split = time_split(features_df, cfg.split, seed=cfg.random_seed)
     split.full_accepted = accepted_pre_leakage
+    split.n_accepted_file = n_accepted_file
     logger.info("Data preparation complete. %s", split)
 
     return split, rejected

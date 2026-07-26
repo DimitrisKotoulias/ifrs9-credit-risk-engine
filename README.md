@@ -1,6 +1,6 @@
 # IFRS 9 Credit-Risk & ECL Engine
 
-**PD scorecard · LGD/EAD · Basel IRB capital · 3-stage IFRS 9 ECL — on 2.26M Lending Club loans.**
+**PD scorecard · LGD/EAD · Basel IRB capital · 3-stage IFRS 9 ECL — on 1.37M Lending Club loans.**
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -14,7 +14,7 @@ engine on Lending Club data.
 
 ## Key Results
 
-Latest full real-data run (Lending Club 2007–2018, ~2.26M accepted loans). To
+Latest full real-data run (Lending Club 2007–2018, ~1.37M accepted loans; 993k with a resolved good/bad outcome form the modelling population). To
 regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 `python scripts/update_readme_metrics.py`) to rewrite the table below from
 `outputs/metrics.json`.
@@ -27,14 +27,14 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 | KS (OOT) | 0.287 |
 | PSI (train → OOT) | 0.003 |
 | Mean LGD (OOS-selected model) | 0.893 |
-| Downturn LGD (p90) | 0.907 |
+| Downturn LGD (p90) | 1.000 |
 | Portfolio EL | $1.63bn |
-| Total RWA (IRB) | $17.76bn |
-| RWA density | 188.2% |
-| Total IFRS 9 ECL | $3.00bn |
-| ECL coverage | 31.8% |
+| Total RWA (IRB) | $19.59bn |
+| RWA density | 207.5% |
+| Total IFRS 9 ECL | $2.37bn |
+| ECL coverage | 25.1% |
 | Stage 2 / Stage 3 share | 29.4% / 21.5% |
-| Operating cut-off | score 530 (61.4% approval, 13.8% bad rate, RAROC -36.4%) |
+| Operating cut-off | score 530 (61.4% approval, 13.8% bad rate, RAROC -34.1%) |
 <!-- METRICS:END -->
 
 > The recommended operating cutoff is the most inclusive score that keeps the

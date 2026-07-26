@@ -528,7 +528,7 @@ def render_latex():
             *rows,
             r"\bottomrule",
             r"\end{tabular}",
-            r"\\[0.3em]{\footnotesize The Granger verdict applies a Bonferroni-corrected threshold $\alpha_{\text{corr}}$ across the lags tested; a minimum $p$-value above $\alpha_{\text{corr}}$ --- even if below the nominal $0.05$ --- is reported as no causality, guarding against multiple-testing false positives.}",
+            r"\\[0.3em]{\footnotesize The Granger verdict applies a Bonferroni correction across the lags tested to a nominal $\alpha=0.10$, giving $\alpha_{\text{corr}}=0.10/k$ for $k$ lags; a minimum $p$-value above $\alpha_{\text{corr}}$ is reported as no causality, guarding against multiple-testing false positives. Note the nominal level is $0.10$, not $0.05$: at $k=4$ this threshold ($0.025$) is looser than a Bonferroni correction applied to $\alpha=0.05$ would be ($0.0125$).}",
             r"\end{table}",
         ])
 
@@ -612,7 +612,10 @@ def render_latex():
             r"$[0.5, 1.5]$ tolerance band. Restricted to vintages originated in or "
             r"before 2016: the 2018Q4 snapshot has not yet resolved recoveries/"
             r"charge-offs for 2017--2018 originations, so their observed default "
-            r"status is right-censored.} \\",
+            r"status is right-censored. The 2015 cohort is absent because it falls in "
+            r"the excluded train/OOT grey zone (Section~2.3); the 2016 cohort is "
+            r"included but is itself only partially matured, which depresses its "
+            r"ratio.} \\",
             r"\end{tabular}",
             r"\end{table}",
         ])
@@ -934,6 +937,165 @@ def render_latex():
     brier_oot = fmt_dec(metrics.get("calibration", {}).get("oot", {}).get("brier_score", 0.0582), 4)
     mean_lgd = fmt_dec(metrics.get("mean_lgd", 0.1178))
     downturn_lgd = fmt_dec(metrics.get("downturn_lgd", 0.1339))
+    lgd_uplift_pp = fmt_dec(
+        (float(metrics.get("downturn_lgd", 0.0)) - float(metrics.get("mean_lgd", 0.0))) * 100.0,
+        precision=2,
+    )
+    lgd_val_n = f"{int(metrics.get('lgd_validation', {}).get('n_test', 0)):,}"
+    # Interpolate the formatted values directly: nested __TOKEN__ placeholders inside a
+    # substituted string would not be expanded, since the scalar replacements run first.
+    _dl = float(metrics.get("downturn_lgd", 0.0))
+    if _dl >= 0.999:
+        downturn_note = (
+            "On this fully unsecured, non-revolving instalment book the realised severity of "
+            "loss-incurring defaults is concentrated at total loss, so the 90th percentile "
+            f"sits at the cap of the $[0,1]$ range ({downturn_lgd}), "
+            f"{lgd_uplift_pp}\\,pp above mean LGD. Two consequences follow. It is a real "
+            "empirical percentile rather than a modelled stress --- more than a tenth of "
+            "loss-incurring defaults recover nothing at all. And because severity cannot "
+            "exceed total loss, the Basel capital calculation has no headroom above this "
+            "figure: any further conservatism must come from PD or EAD, not LGD."
+        )
+    else:
+        downturn_note = (
+            f"The 90th percentile of realised severity sits {lgd_uplift_pp}\\,pp above mean "
+            "LGD, an interior point of the severity distribution, so the downturn figure "
+            "carries genuine headroom over the central estimate."
+        )
+
+    # ── Champion vs challenger verdict, derived from the benchmark table ────────
+    # Which model wins on OOT discrimination is an empirical result, not a premise. The
+    # shipped report asserted the scorecard won and hard-coded the rivals' AUCs; once the
+    # challengers were given feature parity (audit B2) the ranking changed. Everything
+    # below is therefore computed (docs/AUDIT.md finding A12).
+    _bench = metrics.get("ml_benchmark_comparison") or []
+    _sc_row = next((r for r in _bench if "Scorecard" in str(r.get("model", ""))), None)
+    _rivals = [r for r in _bench if r is not _sc_row]
+    if _sc_row and _rivals:
+        _sc_auc = float(_sc_row["oot_auc"])
+        _best_rival = max(_rivals, key=lambda r: float(r["oot_auc"]))
+        _best_auc = float(_best_rival["oot_auc"])
+        _sc_wins = _sc_auc >= _best_auc
+        _gap = abs(_best_auc - _sc_auc)
+        ml_ranking = ", ".join(
+            f"{r['model']} ({float(r['oot_auc']):.4f})"
+            for r in sorted(_rivals, key=lambda r: -float(r["oot_auc"]))
+        )
+        if _sc_wins:
+            ml_verdict = (
+                f"the WoE logistic scorecard attains the highest OOT discrimination in the "
+                f"field: its OOT AUC of {_sc_auc:.4f} exceeds {ml_ranking}. The tree models "
+                "fit in-sample structure that does not transfer across the 2016--2018 regime "
+                "shift, whereas the scorecard's coarse monotone WoE bins generalise more "
+                "stably. The Logistic Scorecard is therefore the champion on discrimination "
+                "grounds alone, before its advantages in point-based explainability and "
+                "regulatory audit compliance are considered."
+            )
+            champion_rationale = (
+                "on the out-of-time set the interpretable logistic scorecard generalises "
+                f"better: its OOT AUC ({_sc_auc:.4f}) exceeds the LightGBM challenger's, a "
+                "gap tested in Section~7.8. Combined with its regulatory advantages, the "
+                "scorecard is the preferred underwriting model."
+            )
+            ceiling_note = (
+                "and the LightGBM challenger (Section~3.6) plateaus at essentially the same "
+                "level rather than materially exceeding it --- consistent with a dataset/"
+                "feature ceiling rather than an under-fitted model"
+            )
+        else:
+            ml_verdict = (
+                f"the tree-based challengers, evaluated on an identical predictor set, "
+                f"\\emph{{outperform}} the WoE logistic scorecard on out-of-time "
+                f"discrimination: the scorecard's OOT AUC of {_sc_auc:.4f} is exceeded by "
+                f"{ml_ranking}. The best challenger ({_best_rival['model']}) leads by "
+                f"{_gap:.4f} AUC. We report this plainly rather than presenting the "
+                "scorecard as the discrimination winner: it is not. The scorecard is "
+                "retained as champion on \\emph{governance} grounds --- exact per-feature "
+                "points attribution for adverse-action reasons, a monotone and auditable "
+                "functional form, and a stable calibration story --- and the cost of that "
+                "choice is the AUC gap quantified here, which a model-risk committee should "
+                "weigh explicitly rather than have hidden."
+            )
+            champion_rationale = (
+                f"on the out-of-time set the LightGBM challenger \\emph{{exceeds}} the "
+                f"scorecard's discrimination (OOT AUC {_best_auc:.4f} vs {_sc_auc:.4f}), a "
+                "gap tested in Section~7.8. The scorecard is nonetheless retained as the "
+                "production model for regulatory and explainability reasons set out below, "
+                "with the discrimination sacrifice reported rather than obscured."
+            )
+            ceiling_note = (
+                f"while the tree challengers reach {_best_auc:.4f} on the same features, "
+                "indicating the scorecard sits modestly below the attainable ceiling rather "
+                "than at it"
+            )
+    else:
+        ml_ranking = "n/a"
+        ml_verdict = "the champion/challenger benchmark did not produce a comparable field."
+        champion_rationale = "the champion/challenger comparison is reported in Section~7.8."
+        ceiling_note = "and is benchmarked against the challenger field in Section~7.8"
+
+    # Paired bootstrap direction: the CI is on (challenger - champion).
+    _ab = metrics.get("ab_test") or {}
+    _ab_med = float((_ab.get("diff") or {}).get("median", 0.0))
+    if not _ab:
+        ab_direction = "the paired bootstrap did not run."
+    elif not _ab.get("significant", False):
+        ab_direction = (
+            "the interval spans zero, so the Gini difference between the two models is not "
+            "distinguishable from sampling noise."
+        )
+    elif _ab_med > 0:
+        ab_direction = (
+            f"the interval lies entirely \\emph{{above}} zero (median $+{_ab_med:.4f}$), so "
+            "the challenger's Gini advantage over the champion is statistically significant, "
+            "not sampling noise."
+        )
+    else:
+        ab_direction = (
+            f"the interval lies entirely \\emph{{below}} zero (median ${_ab_med:.4f}$), so "
+            "the champion's Gini advantage over the challenger is statistically significant, "
+            "not sampling noise."
+        )
+
+    # ── Stage-3 dominance of ECL, derived from the what-if sensitivities (audit C1) ──
+    # ECL is exactly linear in LGD and EAD but flat in PD to the extent that ECL sits in
+    # the PD-independent Stage 3 term. Inverting the PD+50% sensitivity recovers that share.
+    _whatif = {str(r.get("scenario", "")): r for r in (metrics.get("ecl_whatif") or [])}
+
+    def _whatif_pct(name: str) -> str:
+        row = _whatif.get(name)
+        return f"{row['delta_pct']:+.1f}\\%" if row else "n/a"
+
+    whatif_lgd_pct = _whatif_pct("LGD +10pp")
+    whatif_ead_pct = _whatif_pct("EAD +15%")
+    whatif_pd50_pct = _whatif_pct("PD +50%")
+    _pd50 = _whatif.get("PD +50%")
+    if _pd50 is not None:
+        _share = 1.0 - (float(_pd50["delta_pct"]) / 100.0) / 0.5
+        stage3_ecl_share = fmt_pct(max(0.0, min(1.0, _share)), precision=0)
+    else:
+        stage3_ecl_share = "n/a"
+    baseline_z = fmt_dec(metrics.get("macro_implied_shocks", {}).get("baseline", 0.0), 4)
+
+    # Champion vs challenger feature parity (audit A12): the challenger silently dropped
+    # scorecard-engineered columns absent from the raw frame, so the count is asserted from
+    # the data rather than claimed in prose.
+    _n_feat_sc = len(sc_tables.get("selected_features", []))
+    _n_feat_ch = len(metrics.get("challenger", {}).get("shap_mean_abs", []))
+    n_features_sc = str(_n_feat_sc)
+    n_features_ch = str(_n_feat_ch)
+    if _n_feat_ch and _n_feat_sc and _n_feat_ch < _n_feat_sc:
+        _missing = _n_feat_sc - _n_feat_ch
+        feature_parity_note = (
+            f"the challengers are therefore evaluated on {_missing} predictor(s) fewer than the "
+            "champion, so the comparison below understates their attainable discrimination and "
+            "the champion's margin should not be read as a like-for-like result"
+        )
+    else:
+        feature_parity_note = (
+            "the two model families are therefore evaluated on an identical predictor set, so "
+            "the comparison below is like-for-like"
+        )
     total_el = fmt_num(metrics.get("total_el", 2474806))
     total_ead = fmt_num(metrics.get("total_ead_portfolio", 326526293))
     el_rate = fmt_pct(metrics.get("el_rate", 0.0076))
@@ -965,8 +1127,35 @@ def render_latex():
     else:
         raroc_vs_hurdle = "below"
     max_bad_rate_txt = fmt_pct(metrics.get("cutoff_max_bad_rate", 0.15))
+    # The charge netted out of expected profit is the cost of capital, NOT the RAROC
+    # hurdle (the hurdle is only the threshold the resulting RAROC is compared against).
+    cost_of_capital_txt = fmt_pct(metrics.get("cutoff_cost_of_capital", 0.12))
     _corner_row = metrics.get("cutoff_raroc_max") or metrics.get("cutoff_profit_argmax", {})
     corner_raroc = fmt_pct(_corner_row.get("raroc", 0.0))
+    corner_cutoff = fmt_dec(_corner_row.get("cutoff", 0.0), precision=0)
+    # Which corner the unconstrained optimum actually sits at is data-dependent: on a book
+    # where every grid RAROC is negative the argmax is the MOST EXCLUSIVE non-empty cutoff,
+    # not full approval. Derive the wording instead of asserting it.
+    _corner_approval_v = float(_corner_row.get("approval_rate", 0.0))
+    corner_approval = fmt_pct(_corner_approval_v, precision=3)
+    if _corner_approval_v >= 0.99:
+        corner_desc = (
+            "approving essentially the entire through-the-door population --- because "
+            "higher-risk grades carry interest rates high enough to remain RAROC-accretive "
+            "even after loss and capital costs"
+        )
+        corner_implication = "unconstrained optimisation therefore implies near-total approval"
+    else:
+        corner_desc = (
+            f"the most \\emph{{exclusive}} non-empty cutoff on the grid (score "
+            f"\\textbf{{{corner_cutoff}}}, approving only \\textbf{{{corner_approval}}} of the "
+            "population) --- every cutoff on the 400--800 grid returns a negative RAROC, so the "
+            "argmax is simply the smallest, best-quality approved book rather than a "
+            "genuinely profitable operating point"
+        )
+        corner_implication = (
+            "unconstrained optimisation therefore collapses to a vacuous near-zero-volume corner"
+        )
     gini_ttd = fmt_dec(metrics.get("gini_ttd", 0.2086))
     gini_shift = fmt_dec(metrics.get("gini_shift", -0.0555))
     stress_el = fmt_num(metrics.get("stress_el", 8985195))
@@ -983,7 +1172,78 @@ def render_latex():
     base_cap_req_sa = fmt_num(metrics.get("total_rwa_sa", 0) * 0.08)
     rwa_release_cap_abs = fmt_num(abs((metrics.get("total_rwa_sa", 0) - metrics.get("total_rwa", 0)) * 0.08))
     hl_pvalue = fmt_dec(metrics.get("calibration", {}).get("oot", {}).get("hl_pvalue", 0.1656), 4)
+    hl_pvalue_test = fmt_dec(metrics.get("calibration", {}).get("test", {}).get("hl_pvalue", 0.0), 4)
     psi_train_oot = fmt_dec(metrics.get("stability", {}).get("psi_train_oot", 0.0005), 4)
+
+    # ── Population counts: every count in the prose is derived, never hard-coded ──
+    _n_train_v = int(metrics.get("n_train", 0))
+    _n_test_v = int(metrics.get("n_test", 0))
+    _n_oot_v = int(metrics.get("n_oot", 0))
+    _n_model_v = _n_train_v + _n_test_v + _n_oot_v or 1
+    _n_file_v = int(metrics.get("n_accepted_file", 0))
+    _n_resolved_v = int(metrics.get("n_resolved_outcome", metrics.get("n_accepted_raw", 0)))
+    n_accepted_file = f"{_n_file_v:,}"
+    n_resolved_outcome = f"{_n_resolved_v:,}"
+    n_rejected_raw = f"{int(metrics.get('n_rejected_raw', 0)):,}"
+    n_modelling = f"{_n_model_v:,}"
+    n_greyzone = f"{max(0, _n_resolved_v - _n_model_v):,}"
+    pct_train = fmt_pct(_n_train_v / _n_model_v)
+    pct_test = fmt_pct(_n_test_v / _n_model_v)
+    pct_oot = fmt_pct(_n_oot_v / _n_model_v)
+    train_bad_rate = fmt_pct(metrics.get("train_bad_rate", 0.0))
+    train_good_rate = fmt_pct(1.0 - float(metrics.get("train_bad_rate", 0.0)))
+    oot_bad_rate = fmt_pct(
+        metrics.get("calibration_comparison", {}).get("before", {}).get("actual_dr", 0.0)
+    )
+
+    # ── Recalibration: was a calibrator actually attached to the production scorecard? ──
+    # The calibrator is fitted only when the IN-TIME TEST Hosmer-Lemeshow test rejects
+    # (validation/report.py). When it does not, production PD stays raw and the
+    # before/after table below is a standalone diagnostic, not a deployed transform.
+    _iso_applied = bool(metrics.get("calibration", {}).get("isotonic_applied", False))
+    if _iso_applied:
+        recalib_status = (
+            "Post-model recalibration (isotonic regression) was therefore fitted "
+            "\\emph{out-of-sample} on the in-time test partition and attached to the "
+            "production scorecard, and is applied to the OOT set below. Because the "
+            "calibrator is fitted on a different partition and only transferred to OOT, it "
+            "is \\emph{not} guaranteed to improve every OOT diagnostic: as "
+            "Table~\\ref{tab:calibration_comparison} shows, discrimination is essentially "
+            "unchanged and the calibration slope, intercept and expected default rate each "
+            "move slightly \\emph{away} from their targets on the OOT set. We deliberately "
+            "do \\emph{not} fit the recalibrator on the OOT set itself --- doing so would "
+            "trivially pass the Hosmer-Lemeshow test but would be an in-sample artefact. "
+            "Accordingly we retain the recalibrated PDs as an honest out-of-sample transform "
+            "rather than a certified calibration pass."
+        )
+        recalib_production_note = (
+            "corrected via the isotonic recalibration described therein for the scorecard's "
+            "\\textbf{12-month} PD, which feeds Expected Loss, Basel RWA, and SICR-origination "
+            "staging"
+        )
+    else:
+        recalib_status = (
+            "A post-model recalibrator is fitted only when the \\emph{in-time test} "
+            "Hosmer-Lemeshow test rejects, so that the transform is always estimated "
+            "out-of-sample relative to OOT. On this run the in-time test does \\emph{not} "
+            f"reject ($p = {hl_pvalue_test} > 0.05$), so \\textbf{{no calibrator is attached "
+            "to the production scorecard and all reported PDs --- including those feeding "
+            "Expected Loss, Basel RWA and IFRS~9 staging --- are raw, uncalibrated model "
+            "output}. Table~\\ref{tab:calibration_comparison} is therefore a "
+            "\\emph{diagnostic}: it fits an isotonic transform on the in-time test partition "
+            "and reports what it \\emph{would} do to the OOT diagnostics if deployed. It is "
+            "not deployed, and on these figures it would not help --- discrimination is "
+            "essentially unchanged and the calibration slope, intercept and expected default "
+            "rate each move \\emph{away} from their targets. We deliberately do \\emph{not} "
+            "fit the recalibrator on the OOT set itself --- doing so would trivially pass the "
+            "Hosmer-Lemeshow test but would be an in-sample artefact."
+        )
+        recalib_production_note = (
+            "quantified by the era-specific diagnostic below, but \\emph{not} corrected in "
+            "production: no recalibrator is attached (Section~7.2), so this under-prediction "
+            "carries through untreated into Expected Loss, Basel RWA and SICR-origination "
+            "staging for the scorecard's \\textbf{12-month} PD"
+        )
 
     # ── Stage migration ────────────────────────────────────────────────────────
     _mig = metrics.get("ifrs9_stage_migration", {})
@@ -1062,7 +1322,7 @@ def render_latex():
   {\large\scshape Dimitrios Kotoulias\par}
   {\small Athens University of Economics \& Business\par}
   \vspace{0.6em}
-  {\small Lending Club Consumer Loans $\cdot$ 2007--2018 $\cdot$ N = 2.26M\par}
+  {\small Lending Club Consumer Loans $\cdot$ 2007--2018 $\cdot$ N = __N_ACCEPTED_FILE__ accepted\par}
   \vspace{0.4em}
   {\small __TODAY__\par}
   \vfill
@@ -1074,7 +1334,9 @@ def render_latex():
 \begin{abstract}
 This report presents the model development, validation, and risk quantification
 for a retail credit underwriting engine trained on the LendingClub 2007--2018
-loan portfolio (2,260,701 accepted loans; 27,648,741 rejected applications).
+loan portfolio (__N_ACCEPTED_FILE__ accepted loans, of which __N_RESOLVED__ have a resolved
+good/bad outcome and __N_MODELLING__ form the modelling population after the train/OOT grey
+zone is excluded; __N_REJECTED_RAW__ rejected applications).
 The Probability of Default (PD) scorecard achieves an out-of-time Gini of
 \textbf{VAR_GINI_OOT} (AUC = VAR_AUC_OOT), with Population Stability
 Index PSI = VAR_PSI_OOT (model stability: VAR_GINI_RAG).
@@ -1094,7 +1356,7 @@ IFRS 9 Expected Credit Loss provisions total \$VAR_ECL_TOTAL (coverage: VAR_ECL_
 
 Retail credit risk requires modeling frameworks that are explainable and compliant with capital and accounting regulation. Under the Basel Committee on Banking Supervision (BCBS) capital accords \parencite{bcbs2004} and the International Financial Reporting Standards (IFRS~9) accounting guidelines \parencite{iasb2014}, financial institutions must deploy internal risk engines to assess risk-adjusted pricing, regulatory capital, and forward-looking impairment provisions.
 
-This report documents the mathematical foundation, development methodology, and empirical validation of an end-to-end retail credit underwriting, capital calculation, and expected credit loss (ECL) engine. Trained on 2.26 million historical consumer records originated between 2007 and 2018, this framework is designed to bridge the gap between risk underwriting, regulatory capital management, and standard accounting provisions.
+This report documents the mathematical foundation, development methodology, and empirical validation of an end-to-end retail credit underwriting, capital calculation, and expected credit loss (ECL) engine. Trained on __N_MODELLING__ historical consumer records originated between 2007 and 2018 (drawn from __N_ACCEPTED_FILE__ accepted loans, __N_RESOLVED__ of which have a resolved credit outcome), this framework is designed to bridge the gap between risk underwriting, regulatory capital management, and standard accounting provisions.
 
 The core objective is to move away from simplistic statistical estimations and instead construct a highly transparent, mathematically rigorous portfolio risk model that covers:
 \begin{enumerate}
@@ -1140,7 +1402,7 @@ Portfolio ECL Coverage & __ECL_COVERAGE__ & Capital coverage buffer (Total ECL /
 \end{tabular}
 \end{table}
 
-An OOT AUC of __AUC_OOT__ (Gini __GINI_OOT__) is the realistic discrimination ceiling for an application scorecard built on origination-only features on LendingClub-style unsecured consumer data: __RANGE_GINI_OOT__ is the published Gini range for consumer-credit scorecards surveyed by \textcite{lessmann2015benchmarking}, and the LightGBM challenger (Section~3.6) plateaus at essentially the same level rather than materially exceeding it --- consistent with a dataset/feature ceiling rather than an under-fitted model. The figure should therefore be read as realistic, benchmarked performance rather than a shortfall.
+An OOT AUC of __AUC_OOT__ (Gini __GINI_OOT__) is the realistic discrimination ceiling for an application scorecard built on origination-only features on LendingClub-style unsecured consumer data: __RANGE_GINI_OOT__ is the published Gini range for consumer-credit scorecards surveyed by \textcite{lessmann2015benchmarking}, __CEILING_NOTE__. The figure should be read as realistic, benchmarked performance rather than a shortfall.
 
 The scorecard demonstrates stable, high-contrast risk separation across distinct macroeconomic cycles. Under Basel capital standards, the risk-sensitive Internal Ratings-Based (IRB) approach identifies a capital requirement of \textbf{\$__BASE_CAP_REQ__} compared to \textbf{\$__BASE_CAP_REQ_SA__} under the Standardised Approach. This capital surcharge of \textbf{\$__RWA_RELEASE_CAP_ABS__} reflects the elevated risk profile (PD/LGD) of the LendingClub consumer portfolio, demonstrating that a flat 75\% risk weight under the Standardised Approach materially undercapitalises this retail asset class.
 
@@ -1169,11 +1431,13 @@ Y =
 \subsection{Out-of-Time (OOT) Splitting}
 To replicate standard banking validation practices, the data is split chronologically based on loan origination date (\texttt{issue\_d}):
 \begin{itemize}
-    \item \textbf{Training Population:} Loans originated prior to January 2015 ($N = \text{VAR_N_TRAIN}$; 36.6\% of modelling population). Training bad rate: 17.1\%.
-    \item \textbf{In-Time Holdout Set:} Stratified random 20\% sample from the training period ($N = \text{VAR_N_TEST}$; 9.2\% of modelling population). Stratification preserves the 82.9\%/17.1\% good/bad ratio.
-    \item \textbf{Out-of-Time (OOT) Set:} All loans originated between January 2016 and December 2018 ($N = \text{VAR_N_OOT}$; 54.3\% of modelling population). OOT observed bad rate: 25.27\%, reflecting the portfolio's seasoning and the macroeconomic deterioration of the 2016--2018 vintage cohorts.
+    \item \textbf{Training Population:} Loans originated prior to January 2015 ($N = \text{VAR_N_TRAIN}$; __PCT_TRAIN__ of modelling population). Training bad rate: __TRAIN_BAD_RATE__.
+    \item \textbf{In-Time Holdout Set:} Simple random 20\% sample from the training period ($N = \text{VAR_N_TEST}$; __PCT_TEST__ of modelling population). The sample is drawn without class stratification; at this size the __TRAIN_GOOD_RATE__/__TRAIN_BAD_RATE__ good/bad ratio is reproduced by the law of large numbers rather than enforced by design.
+    \item \textbf{Out-of-Time (OOT) Set:} All loans originated between January 2016 and December 2018 ($N = \text{VAR_N_OOT}$; __PCT_OOT__ of modelling population). OOT observed bad rate: __OOT_BAD_RATE__, reflecting the portfolio's seasoning and the macroeconomic deterioration of the 2016--2018 vintage cohorts.
 \end{itemize}
 This chronological split simulates how the model will perform on future vintages, testing for structural or macroeconomic shifts.
+
+\textbf{Excluded grey zone.} The two cut-offs are deliberately non-adjacent: loans originated in the twelve months between them (the entire \textbf{2015} origination cohort) fall into neither partition and are \emph{dropped from the modelling population entirely}. The embargo prevents 2015 vintages --- which are simultaneously close enough to the training window to share its underwriting regime and immature enough at the 2018Q4 snapshot to have unresolved outcomes --- from contaminating either side of the temporal validation. The percentages above, the modelling population of __N_MODELLING__ loans (__N_GREYZONE__ resolved-outcome loans fall in the grey zone and are dropped), and every vintage table in this report are therefore stated \emph{net of 2015}, which is why the vintage series in Tables~\ref{tab:lifetime_pd_calibration} and~\ref{tab:pd_backtest} step directly from 2014 to 2016.
 
 \subsection{Leakage and Target Variable Separation}
 Data leakage is controlled by dropping post-origination fields (e.g., outstanding balance, payment records, and recovery metrics) from the PD feature set. However, these post-origination variables (such as actual recoveries and write-offs) are preserved for the defaulted-only population. This allows the LGD model to evaluate recovery performance without leaking future data into the PD scorecard.
@@ -1190,7 +1454,7 @@ Vintage analysis tracks the cumulative default curves of origination cohorts (qu
 
 Figure~\ref{fig:eda_target_grade} displays additional exploratory distributions, demonstrating the relationship between historical default rates and risk grades, amortization terms, and loan purposes.
 
-All EDA visualizations in this section are computed on the in-time development sample (train and test partitions of the resolved-outcome modelling population), not the full raw portfolio: the Out-of-Time partition is withheld from all exploratory analysis to preserve the integrity of the temporal validation, and loans with unresolved statuses are excluded per Section~2.1. Full-portfolio statistics ($N = 2{,}260{,}701$ accepted loans) are used for portfolio-level capital and impairment calculations. Population counts embedded in the EDA figures therefore reflect the development sample.
+All EDA visualizations in this section are computed on the in-time development sample (train and test partitions of the resolved-outcome modelling population), not the full raw portfolio: the Out-of-Time partition is withheld from all exploratory analysis to preserve the integrity of the temporal validation, and loans with unresolved statuses are excluded per Section~2.1. Portfolio-level capital and impairment calculations are run on the modelling population ($N = $ __N_MODELLING__), i.e.\ the train, test and OOT partitions combined --- not on the __N_ACCEPTED_FILE__ loans in the source file, since loans with an unresolved status carry no good/bad label and are excluded (__N_RESOLVED__ remain after that filter, of which __N_GREYZONE__ fall in the excluded grey zone described in Section~2.3). Population counts embedded in the EDA figures therefore reflect the development sample.
 
 \begin{figure}[H]
 \centering
@@ -1280,7 +1544,7 @@ Each WoE bin is converted to credit score points using the scaling formula. High
 __SCORECARD_POINTS__
 
 \subsection{Interpretability vs.\ Performance: Challenger Model Benchmark}
-A non-linear LightGBM model was trained on the same feature set as a challenger \parencite{baesens2016}. Although gradient boosting is competitive in-sample, on the out-of-time (OOT) set the interpretable logistic scorecard generalises better: its OOT AUC (VAR_AUC_OOT) exceeds the LightGBM challenger's (VAR_LGBM_AUC_OOT), a gap confirmed as statistically significant by both the DeLong test and the paired bootstrap in Section~7.8. The WoE scorecard's coarse, monotone binning generalises across the 2016--2018 regime shift better than the boosted model, which is more prone to fitting in-sample idiosyncrasies. Combined with its regulatory advantages, the scorecard is therefore the preferred underwriting model. Regulatory standards (such as the US Fair Credit Reporting Act) require financial institutions to provide clear ``adverse action codes'' (reasons for denial) to rejected applicants. A linear scorecard allows for immediate, exact points-attribution for each feature, which is not possible with complex machine learning models without relying on approximations like SHAP.
+A non-linear LightGBM model was trained as a challenger \parencite{baesens2016} on the scorecard's selected predictors (see Section~7.8 for the exact feature count actually consumed by each model). Although gradient boosting is competitive in-sample, __CHAMPION_RATIONALE__ Regulatory standards (such as the US Fair Credit Reporting Act) require financial institutions to provide clear ``adverse action codes'' (reasons for denial) to rejected applicants. A linear scorecard allows for immediate, exact points-attribution for each feature, which is not possible with complex machine learning models without relying on approximations like SHAP.
 
 To address potential policy-decision circularity from using LendingClub's own underwriting variables (\texttt{int\_rate} and \texttt{grade}), we developed a secondary Pure Underwriting Scorecard (Model B) that completely excludes these fields and relies solely on applicant credit bureau and demographic variables. Table~\ref{tab:underwriting_comparison} compares the performance of the full scorecard (Model A) against this independent underwriting model. While Model A is the designated pipeline champion due to its superior discrimination, it utilizes LendingClub's pricing variables which are themselves highly correlated risk assessments. This introduces a degree of decision circularity. Model B (Pure Underwriting Scorecard) shows that a model built solely on raw credit bureau and demographic features remains competitive (OOT AUC = VAR_MODELB_AUC_OOT vs Model A's VAR_AUC_OOT, both as reported in Table~\ref{tab:underwriting_comparison}), supporting the scorecard's viability in an independent bank underwriting environment.
 
@@ -1314,7 +1578,7 @@ The pooled accepts and parcelled rejects population was refitted to produce a co
         \toprule
         \textbf{Scorecard Population} & \textbf{Gini} & \textbf{Business Interpretation} \\
         \midrule
-        \textbf{Accepts-Only (Base)} & __GINI__ & Discrimination on the approved-only population (excludes rejects). \\
+        \textbf{Accepts-Only (Base)} & __GINI__ & Champion scorecard on the approved-only in-time test partition. \\
         \textbf{Through-the-Door (Parcelled Refit)} & __GINI_TTD__ & Corrected scorecard accounts for selection bias across TTD. \\
         \midrule
         \textbf{Gini Coefficient Shift} & __GINI_SHIFT__ & Conservative risk dilution when scoring raw through-the-door applicants. \\
@@ -1322,7 +1586,7 @@ The pooled accepts and parcelled rejects population was refitted to produce a co
     \end{tabular}
 \end{table}
 
-The Gini shift of \textbf{__GINI_SHIFT__} points demonstrates a standard credit cycle finding: through-the-door populations contain higher latent risk profiles. This refitting adjusts the credit scorecard's parameters to correct for this systemic underwriting selection bias.
+The Gini shift of \textbf{__GINI_SHIFT__} points is consistent with the standard credit-cycle finding that through-the-door populations carry higher latent risk. \emph{Measurement caveat:} the shift is computed \emph{within} the parcelled refit --- the same through-the-door model scored on the accepts subset versus on the full accepts-plus-parcelled population --- and both figures are in-sample; the rejects additionally carry inferred, not observed, labels. The shift is then applied to the champion scorecard's held-out Gini to obtain the through-the-door figure in the table. The two rows are therefore not two independently validated scorecards, and the shift should be read as a directional selection-bias indicator rather than a measured out-of-sample degradation.
 
 \subsection{Survival Analysis: Kaplan-Meier and Cox Proportional Hazards}
 The production PD term structure (Section~6) is a discrete-time hazard model. As a challenger model we additionally fit a time-to-event survival model, the industry standard for IFRS~9 lifetime-PD term-structure work \parencite{bellotti2009}. Kaplan-Meier estimators give non-parametric survival curves $S(t)$ per credit grade (Figure~\ref{fig:km_survival}), and a Cox proportional-hazards model quantifies each covariate's multiplicative effect on the default hazard. The duration is a months-on-book proxy derived from cumulative payments and the event is the binary default flag, a synthesised time-to-event dataset since the raw data records no observed default month (a documented limitation revisited in Section~10). The model's rank-discrimination is summarised by the concordance index (Cox C-index $=$ __COX_CINDEX__), the survival-analysis analogue of the AUC.
@@ -1346,7 +1610,7 @@ __COX_TABLE__
 \subsection{Bimodal Two-Stage LGD Model}
 Loss Given Default (LGD) represents the economic loss rate incurred when an exposure defaults. Unlike PD, which models a binary outcome, LGD is continuous, bounded within $[0, 1]$, and heavily bimodal. Defaults typically result in either a complete recovery (LGD = 0, ``cure'') or a near-total loss (LGD close to 1).
 
-To capture this bimodal behavior \parencite{schuermann2004}, a \textbf{two-stage LGD model} is constructed as one of two candidate severity models --- benchmarked in Section~\ref{subsec:benchmarks} against a LightGBM challenger, with the lower out-of-sample error determining which model is deployed:
+To capture this bimodal behavior \parencite{schuermann2004}, a \textbf{two-stage LGD model} is constructed as one of two candidate severity models --- benchmarked against a LightGBM challenger in Section~4.2, with the lower out-of-sample error determining which model is deployed:
 \begin{enumerate}
     \item \textbf{Stage 1 (Cure Model):} A logistic regression models the probability of a zero-loss outcome (cure):
     \begin{equation}
@@ -1362,11 +1626,13 @@ The final predicted LGD is the product of the two stages:
 \text{LGD}_{\text{pred}} = p_{\text{loss}} \times E[\text{LGD} | \text{LGD} > 0]
 \end{equation}
 
-For Basel IRB capital calculations, a conservative \textbf{Downturn LGD} is estimated at the 90th percentile of the default severity distribution:
+For Basel IRB capital calculations, a \textbf{Downturn LGD} is taken as the 90th percentile of the \emph{realised} severity distribution across loss-incurring defaults (floored at the mean predicted LGD, so the stress can never fall below the central estimate):
 \begin{itemize}
     \item \textbf{Mean Expected LGD (deployed model):} __MEAN_LGD__ (used for IFRS 9 Stage 1 \& 2 provisions)
     \item \textbf{Downturn LGD:} __DOWNTURN_LGD__ (used for Basel RWA capital calculations)
 \end{itemize}
+
+\noindent\textbf{On the magnitude of the downturn uplift.} __DOWNTURN_NOTE__
 
 \subsubsection*{Why Mean LGD Is Close to Total Loss}
 The realised LGD used to fit and validate the severity model is computed directly from resolved loan outcomes as
@@ -1375,10 +1641,10 @@ The realised LGD used to fit and validate the severity model is computed directl
 \end{equation}
 i.e.\ net recoveries (gross post-charge-off recoveries less the fee paid to the collection agency) divided by the EAD proxy (funded amount less principal already repaid at charge-off), clipped to $[0,1]$. On this fully unsecured, non-revolving instalment book, post-charge-off cash recoveries are small relative to the outstanding balance, so realised severity concentrates near total loss; the two-stage model's cure probability $p_{\text{loss}}$ separately absorbs the loans that resolve with zero loss, while the conditional severity stage captures how close to total the loss is for the remainder. The published unsecured LGD bands cited below (\textcite{schuermann2004}: 0.45--0.55, corporate/wholesale debt; \textcite{bellotti2012}: 0.25--0.45, revolving retail cards) are measured on portfolios with active collections/settlement programmes and revolving-card structures where partial recoveries are more common; the deployed mean LGD of __MEAN_LGD__, measured on already-charged-off, non-revolving loans against a book-value EAD proxy with no collateral, is a structurally different (and higher) quantity by construction rather than an anomaly. Its magnitude relative to these bands is discussed further, with numeric verdicts, in the benchmark table (Section~\ref{subsec:benchmarks}).
 
-LGD Benchmark Context: Two severity models are compared on a chronologically held-out selection sample --- a two-stage cure-plus-severity model and a LightGBM challenger --- and the model with the lower error there is deployed for all downstream provisioning and capital; the metrics in Table~\ref{tab:lgd_validation} are then computed on a disjoint reporting sample so the published out-of-sample performance is not measured on the same defaults used for the promotion decision. For unsecured LGD, \textcite{schuermann2004} report a $0.45$--$0.55$ range (a corporate/wholesale-debt review) while \textcite{bellotti2012} document a lower $0.25$--$0.45$ band for revolving retail credit-card portfolios. The deployed mean LGD of __MEAN_LGD__ and downturn LGD of __DOWNTURN_LGD__ are assessed against these published ranges in the benchmark table (Section~\ref{subsec:benchmarks}), where any deviation is reported together with its driver. The Downturn LGD is applied conservatively at the 90th percentile of the severity distribution and used exclusively for Basel IRB capital calculations, providing an additional buffer above the mean.
+LGD Benchmark Context: Two severity models are compared on a chronologically held-out selection sample --- a two-stage cure-plus-severity model and a LightGBM challenger --- and the model with the lower error there is deployed for all downstream provisioning and capital; the metrics in Table~\ref{tab:lgd_validation} are then computed on a disjoint reporting sample so the published out-of-sample performance is not measured on the same defaults used for the promotion decision. For unsecured LGD, \textcite{schuermann2004} report a $0.45$--$0.55$ range (a corporate/wholesale-debt review) while \textcite{bellotti2012} document a lower $0.25$--$0.45$ band for revolving retail credit-card portfolios. The deployed mean LGD of __MEAN_LGD__ and downturn LGD of __DOWNTURN_LGD__ are assessed against these published ranges in the benchmark table (Section~\ref{subsec:benchmarks}), where any deviation is reported together with its driver. The Downturn LGD is taken at the 90th percentile of the realised severity distribution and used exclusively for Basel IRB capital calculations, providing a buffer of __LGD_UPLIFT_PP__\,pp above the mean.
 
 \subsection{Out-of-Sample LGD Validation}
-The severity model is validated out-of-time on defaulted loans from vintages held out of the fitting window. Table~\ref{tab:lgd_validation} reports the standard LGD backtesting metrics --- Mean Absolute Error (MAE), Root Mean Squared Error (RMSE), the coefficient of determination $R^2$, and a two-sample Kolmogorov-Smirnov (KS) statistic comparing the marginal predicted and realised LGD distributions \parencite{loterman2012benchmarking}. The KS statistic is reported without its $p$-value: at this sample size ($n\approx150{,}000$) the test is hyper-sensitive to any trivial distributional difference and, being a marginal (not per-loan) comparison, cannot by itself certify calibration; Figure~\ref{fig:lgd_calibration} and the decile table against the $45^{\circ}$ line are the calibration evidence. The aggregate portfolio-level mean LGD sits above the unsecured LGD literature ranges cited in Section~\ref{subsec:benchmarks} (driver discussed there), and the loan-level predictive performance of the deployed severity model is separately weak, with a negative out-of-sample $R^2$ of $__LGD_R2__$ (Table~\ref{tab:lgd_validation}); the rejected two-stage model was materially worse at $R^2 \approx __LGD_R2_TWOSTAGE__$, which drove the champion--challenger switch. A negative $R^2$ is a well-documented model risk: realized retail LGD is highly bimodal (concentrated at 0 for cured loans and near 1.0 for write-offs), and predicting the exact loss severity on unsecured, non-collateralized consumer loans is statistically challenging. While the model remains suitable for calculating conservative portfolio-level capital buffers, its loan-level predictions should be treated with caution.
+The severity model is validated out-of-time on defaulted loans from vintages held out of the fitting window. Table~\ref{tab:lgd_validation} reports the standard LGD backtesting metrics --- Mean Absolute Error (MAE), Root Mean Squared Error (RMSE), the coefficient of determination $R^2$, and a two-sample Kolmogorov-Smirnov (KS) statistic comparing the marginal predicted and realised LGD distributions \parencite{loterman2012benchmarking}. The KS statistic is reported without its $p$-value: at this sample size ($n=$ __LGD_VAL_N__) the test is hyper-sensitive to any trivial distributional difference and, being a marginal (not per-loan) comparison, cannot by itself certify calibration; Figure~\ref{fig:lgd_calibration} and the decile table against the $45^{\circ}$ line are the calibration evidence. The aggregate portfolio-level mean LGD sits above the unsecured LGD literature ranges cited in Section~\ref{subsec:benchmarks} (driver discussed there), and the loan-level predictive performance of the deployed severity model is separately weak, with a negative out-of-sample $R^2$ of $__LGD_R2__$ (Table~\ref{tab:lgd_validation}); the rejected two-stage model was materially worse at $R^2 \approx __LGD_R2_TWOSTAGE__$, which drove the champion--challenger switch. A negative $R^2$ is a well-documented model risk: realized retail LGD is highly bimodal (concentrated at 0 for cured loans and near 1.0 for write-offs), and predicting the exact loss severity on unsecured, non-collateralized consumer loans is statistically challenging. While the model remains suitable for calculating conservative portfolio-level capital buffers, its loan-level predictions should be treated with caution.
 
 __LGD_VALIDATION_TABLE__
 
@@ -1511,14 +1777,14 @@ IFRS~9 \parencite{iasb2014} introduces a forward-looking impairment model based 
 \begin{itemize}
     \item \textbf{Stage 1 (Performing):} No Significant Increase in Credit Risk (SICR) since origination. ECL is measured over a \textbf{12-month horizon}.
     \item \textbf{Stage 2 (Underperforming):} SICR is detected since origination, but the loan is not defaulted. ECL is measured over the \textbf{remaining lifetime} of the loan.
-    \item \textbf{Stage 3 (Credit-Impaired):} Non-performing loans (90+ DPD or default). ECL is measured over the \textbf{remaining lifetime}, with PD set to \textbf{100\%}.
+    \item \textbf{Stage 3 (Credit-Impaired):} Non-performing loans. ECL is measured over the \textbf{remaining lifetime}, with PD set to \textbf{100\%}. \emph{Implementation note:} the dataset carries no monthly days-past-due panel, so Stage~3 is not identified by a 90+ DPD observation but by the loan's terminal resolved status (the modelling target). This makes the Stage~3 population a hindsight classification --- see Section~10, where its effect on the headline ECL is quantified.
 \end{itemize}
 
 A Significant Increase in Credit Risk (SICR) \parencite{novotny2016} is triggered if:
 \begin{itemize}
     \item The ratio of lifetime PD to origination PD exceeds \textbf{2.5$\times$}.
     \item The absolute lifetime PD exceeds \textbf{20\%}.
-    \item The loan is \textbf{30+ days past due (DPD)}, acting as a backstop.
+    \item A delinquency backstop fires. The IFRS~9 standard backstop is 30+ days past due at the reporting date; absent a DPD panel, the implemented proxy is \texttt{delinq\_2yrs} $\geq 1$, i.e.\ at least one delinquency recorded in the two years \emph{before} origination. This is an application-time credit-history flag rather than a current-delinquency measure, and is a documented deviation from the standard (Section~10).
 \end{itemize}
 
 \subsection{PD Term Structure and Lifetime Expected Credit Loss}
@@ -1530,10 +1796,10 @@ where $h(t)$ is the conditional default hazard at month $t$. The final ECL is th
 \begin{equation}
 ECL = \sum_{t=1}^{H} \frac{m(t) \times \text{LGD}(t) \times \text{EAD}(t)}{(1 + \text{EIR})^t}
 \end{equation}
-\parencite{bellini2019}. Where $\text{EIR}$ is the Effective Interest Rate derived from the loan's contractual pricing.
+\parencite{bellini2019}. Where $\text{EIR}$ is the Effective Interest Rate derived from the loan's contractual pricing. \emph{Implementation note:} in the current engine $\text{LGD}(t)$ and $\text{EAD}(t)$ are held constant at their per-loan point estimates across the summation --- exposure is evaluated once (Section~4.3) rather than re-amortised month by month --- so the formula above is the general statement and the implementation is its constant-exposure special case. This is conservative for amortising loans, since the outstanding balance in fact declines over the horizon.
 
 \subsubsection*{Lifetime PD Calibration: Validating the ECL-Driving Term Structure}
-The lifetime PD $1 - S(H)$ used directly in the equation above is produced by the discrete hazard model and enters the ECL sum unchanged. It is a distinct estimator from the scorecard's 12-month PD and is \emph{not} passed through the scorecard's out-of-sample isotonic/Platt recalibration described in Section~7.2 --- that recalibration only touches the 12-month PD used for expected loss, Basel RWA, and SICR-origination staging. Rather than silently trusting an unvalidated PD inside the loss-driving formula, Table~\ref{tab:lifetime_pd_calibration} instead validates the hazard model's own lifetime PD against realised lifetime default rates by origination vintage (restricted to vintages matured by 2016, since 2017--2018 charge-offs are not yet resolved in the 2018Q4 snapshot). A ratio near 1.0 indicates the hazard PD entering the ECL sum is itself reasonably calibrated to realised outcomes; a ratio materially outside the $[0.5, 1.5]$ tolerance band would indicate that the term structure --- not just the 12-month scorecard PD --- requires recalibration before it can be trusted in the ECL sum, a finding this report would then surface explicitly rather than let pass silently into the headline coverage ratio.
+The lifetime PD $1 - S(H)$ used directly in the equation above is produced by the discrete hazard model and enters the ECL sum unchanged. It is a distinct estimator from the scorecard's 12-month PD and is \emph{not} passed through the scorecard's out-of-sample isotonic/Platt recalibration described in Section~7.2 --- that recalibration only touches the 12-month PD used for expected loss, Basel RWA, and SICR-origination staging. Rather than silently trusting an unvalidated PD inside the loss-driving formula, Table~\ref{tab:lifetime_pd_calibration} instead validates the hazard model's own lifetime PD against realised lifetime default rates by origination vintage (restricted to vintages originated in or before 2016, since 2017--2018 charge-offs are not yet resolved in the 2018Q4 snapshot; note the 2016 cohort itself is only partially matured, so its observed rate is still right-censored). A ratio near 1.0 indicates the hazard PD entering the ECL sum is itself reasonably calibrated to realised outcomes; a ratio materially outside the $[0.5, 1.5]$ tolerance band would indicate that the term structure --- not just the 12-month scorecard PD --- requires recalibration before it can be trusted in the ECL sum, a finding this report would then surface explicitly rather than let pass silently into the headline coverage ratio.
 
 __LIFETIME_PD_CALIBRATION_TABLE__
 
@@ -1554,7 +1820,7 @@ The final Expected Credit Loss (ECL) is computed as the probability-weighted ave
 __MACRO_ELASTICITIES_TABLE__
 
 \subsubsection*{Time-Series Justification of the Lag and Sign Choice}
-Table~\ref{tab:macro_ts} reports time-series diagnostics on the quarterly default-rate and macro series: an Augmented Dickey-Fuller (ADF) stationarity test, a Granger-causality test of UNRATE on the default rate, an AIC grid search over the UNRATE lag (verifying the economically-correct positive sign at the selected lag), and a Johansen cointegration test with a VECM long-run relation where cointegration is present \parencite{engelmann2011}. The contemporaneous OLS default-rate regression is prone to spurious signs (the negative UNRATE coefficient reflects charge-off lags and underwriting drift), so we impose economic sign priors for scenario projection rather than build a full Vector Error Correction Model (VECM) for projections, following the standard banking preference for simpler, transparent Vasicek overlays.
+Table~\ref{tab:macro_ts} reports time-series diagnostics on the quarterly default-rate and macro series: an Augmented Dickey-Fuller (ADF) stationarity test, a Granger-causality test of UNRATE on the default rate, an AIC grid search over the UNRATE lag (reporting whether the economically-correct positive sign holds at the AIC-selected lag --- on this sample it does \emph{not}, which is precisely why sign priors are imposed for projection), and a Johansen cointegration test with a VECM long-run relation where cointegration is present \parencite{engelmann2011}. The contemporaneous OLS default-rate regression is prone to spurious signs (the negative UNRATE coefficient reflects charge-off lags and underwriting drift), so we impose economic sign priors for scenario projection rather than build a full Vector Error Correction Model (VECM) for projections, following the standard banking preference for simpler, transparent Vasicek overlays.
 
 __MACRO_TS_TABLE__
 
@@ -1596,7 +1862,7 @@ Model validation is performed on the completely held-out Out-of-Time (OOT) datas
 \end{figure}
 
 \subsection{Calibration Robustness}
-Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{__HL_PVALUE__}} < 0.05$). Given the very large sample size ($N = \text{VAR_N_OOT}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. Post-model recalibration (isotonic regression) was therefore fitted \emph{out-of-sample} on the in-time test partition and applied to the OOT set. Because the calibrator is fitted on a different partition and only transferred to OOT, it is \emph{not} guaranteed to improve every OOT diagnostic: as Table~\ref{tab:calibration_comparison} shows, discrimination is essentially unchanged and the calibration slope, intercept and expected default rate each move slightly \emph{away} from their targets on the OOT set. We deliberately do \emph{not} fit the recalibrator on the OOT set itself --- doing so would trivially pass the Hosmer-Lemeshow test but would be an in-sample artefact. Accordingly we retain the recalibrated PDs as an honest out-of-sample transform rather than a certified calibration pass; the residual higher-decile underprediction carries through to the ECL provisions and is listed among the known limitations in Section~10.
+Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{__HL_PVALUE__}} < 0.05$). Given the very large sample size ($N = \text{VAR_N_OOT}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. __RECALIB_STATUS__ The residual higher-decile underprediction carries through to the ECL provisions and is listed among the known limitations in Section~10.
 
 __CALIBRATION_COMPARISON_TABLE__
 
@@ -1627,7 +1893,7 @@ Model backtesting compares the scorecard's predicted average PD against observed
 \end{equation}
 where $\bar{p}_v$ is the cohort-average predicted PD and $\bar{d}_v$ is the realised default rate. A ratio between 0.5 and 1.5 indicates acceptable calibration. Cohorts outside this band are flagged for recalibration ($\dagger$). Table~\ref{tab:pd_backtest} reports the backtesting results by vintage quarter.
 
-The systematic underprediction observed in the 2016--2018 vintages (PD Ratio consistently below 0.85) is consistent with the calibration drift identified in Section~7.2 and corrected via the isotonic regression recalibration described therein for the scorecard's \textbf{12-month} PD, which feeds Expected Loss, Basel RWA, and SICR-origination staging. The hazard model's \textbf{lifetime} PD that drives IFRS~9 ECL directly ($\text{ECL} = \sum_t m(t)\times\text{LGD}(t)\times\text{EAD}(t)/(1+\text{EIR})^t$) is a separate estimator and is \emph{not} passed through this scorecard recalibration; it is instead independently validated against realised lifetime default rates by vintage in Table~\ref{tab:lifetime_pd_calibration} (Section~6.2).
+The systematic underprediction observed in the 2016--2018 vintages (PD Ratio consistently below 0.85) is consistent with the calibration drift identified in Section~7.2 and __RECALIB_PRODUCTION_NOTE__. The hazard model's \textbf{lifetime} PD that drives IFRS~9 ECL directly ($\text{ECL} = \sum_t m(t)\times\text{LGD}(t)\times\text{EAD}(t)/(1+\text{EIR})^t$) is a separate estimator and is \emph{not} passed through this scorecard recalibration; it is instead independently validated against realised lifetime default rates by vintage in Table~\ref{tab:lifetime_pd_calibration} (Section~6.2).
 
 \begin{table}[H]
 \centering
@@ -1659,11 +1925,11 @@ __VINTAGE_CALIB_TABLE__
 
 \subsection{IFRS~9 Stage Migration and Coverage Analysis}
 
-The stage migration matrix quantifies transitions between IFRS~9 performance stages \parencite{novotny2016}, providing a key indicator of portfolio deterioration velocity. Rows represent the origination stage; columns represent the reporting-date stage.
+The stage migration matrix quantifies transitions between IFRS~9 performance stages \parencite{novotny2016}, providing a key indicator of portfolio deterioration velocity. Rows represent the \emph{simulated} stage twelve months before the reporting date; columns represent the reporting-date stage. Because the dataset carries no monthly servicing snapshots, the $t-12$ state is reconstructed by interpolating each loan's credit profile between origination and the reporting date (Section~10) and is restricted to loans already at least 12 months on book --- it is not an observed historical classification.
 
 \begin{table}[H]
 \centering
-\caption{IFRS~9 Stage Migration Matrix (Origination $\to$ Reporting Date)}
+\caption{IFRS~9 Stage Migration Matrix (12 Months Prior $\to$ Reporting Date)}
 \label{tab:stage_migration}
 \vspace{0.5em}
 \begin{tabular}{lccc}
@@ -1674,7 +1940,7 @@ The stage migration matrix quantifies transitions between IFRS~9 performance sta
 \textbf{Stage~2} & __STAGE_2_1__ & __STAGE_2_2__ & __STAGE_2_3__ \\
 \textbf{Stage~3} & __STAGE_3_1__ & __STAGE_3_2__ & __STAGE_3_3__ \\
 \bottomrule
-\multicolumn{4}{p{0.92\linewidth}}{\footnotesize\textit{Note:} the ``From Stage~3'' row is zero by construction: no loan originates directly into Stage~3, as Stage~3 classification requires 90+ days past due status, which by definition cannot occur at origination ($t=0$).} \\
+\multicolumn{4}{p{0.92\linewidth}}{\footnotesize\textit{Note:} the ``From Stage~3'' row is zero \emph{by construction of the reconstruction}, not as an empirical finding: the interpolated $t-12$ classifier only ever assigns Stage~1 or Stage~2, because the credit-impaired flag available in this dataset is the terminal resolved outcome and cannot be evaluated at a historical date. Loans that were already credit-impaired twelve months before the reporting date are therefore absorbed into the Stage~1 and Stage~2 rows, and the true migration \emph{out} of Stage~3 is unobservable here.} \\
 \end{tabular}
 \end{table}
 
@@ -1756,10 +2022,10 @@ Table~\ref{tab:ml_comparison} presents the out-of-time (OOT) generalization benc
 
 __ML_COMPARISON_TABLE__
 
-Notably, the WoE logistic scorecard attains the highest discrimination on \emph{both} the in-time test and the out-of-time sets: its OOT AUC (VAR_AUC_OOT) exceeds LightGBM (VAR_LGBM_AUC_OOT), XGBoost (0.6776), Random Forest (0.6727) and even the weighted ensemble (0.6943). The tree models fit in-sample structure that does not transfer across the 2016--2018 regime shift, whereas the scorecard's coarse monotone WoE bins generalise more stably. The Logistic Scorecard is therefore the champion on discrimination grounds alone, before its decisive advantages in point-based explainability and regulatory audit compliance are even considered. It should be noted that the challenger models (LightGBM, XGBoost, Random Forest) were trained using standard, default configurations without systematic hyperparameter grid search tuning. While hyperparameter optimization might yield marginal discrimination improvements, the baseline scorecard's outperformance on the OOT set is primarily driven by the coarse, monotonic Weight of Evidence (WoE) binning, which acts as a powerful structural regulariser and guards against overfitting the pre-2015 vintage regimes.
+Notably, __ML_VERDICT__ \textbf{Feature parity.} The scorecard consumes __N_FEATURES_SC__ selected predictors and the tree challengers consume __N_FEATURES_CH__; __FEATURE_PARITY_NOTE__ It should be noted that the challenger models (LightGBM, XGBoost, Random Forest) were trained using standard, default configurations without systematic hyperparameter grid search tuning. Hyperparameter optimisation would, if anything, widen any challenger advantage, so the ranking above should be read as a lower bound on what tuned tree models could achieve on this feature set.
 
 \subsubsection*{Is the Challenger's Edge Statistically Significant?}
-Point-estimate AUC/Gini gaps cannot distinguish a genuine improvement from sampling noise. To test significance we run a paired bootstrap: the same held-out OOT rows are resampled for both models and a confidence interval is built on the \emph{difference} in Gini (challenger $-$ champion). If that interval excludes zero, the difference is significant. Table~\ref{tab:ab_test} reports the result; it complements the analytic DeLong test on the same pair.
+Point-estimate AUC/Gini gaps cannot distinguish a genuine improvement from sampling noise. To test significance we run a paired bootstrap: the same held-out OOT rows are resampled for both models and a confidence interval is built on the \emph{difference} in Gini (challenger $-$ champion). If that interval excludes zero, the difference is significant. Table~\ref{tab:ab_test} reports the result --- __AB_DIRECTION__ It complements the analytic DeLong test on the same pair.
 
 __AB_TEST_TABLE__
 
@@ -1816,7 +2082,7 @@ The Gains Chart measures the model's ability to concentrate defaults within the 
 % -----------------------------------------------------------------------------
 \section{Business Decisioning and Cutoff Optimisation}
 
-Underwriting decisions require balancing credit risk, portfolio growth, and capital constraints. We evaluate each score cutoff on Expected Profit and Risk-Adjusted Return on Capital (RAROC), with expected loss (at the approved-population bad rate) and a __RAROC_HURDLE__ charge on economic capital both netted out. On this risk-priced, high-yield portfolio the unconstrained profit-maximising \emph{and} RAROC-maximising cutoff is the same corner solution --- approving the entire through-the-door population, at a portfolio RAROC of \textbf{__CORNER_RAROC__} --- because higher-risk grades carry interest rates high enough to remain RAROC-accretive even after loss and capital costs. Because unconstrained optimisation therefore implies 100\% approval, the decision problem is formulated as a \emph{constrained} optimization: we maximize approved volume and expected profit subject to an active risk-appetite ceiling on the approved bad rate (\textbf{__MAX_BAD_RATE__}), taking the most inclusive cutoff (maximising approved profit) whose approved bad rate stays within that ceiling. This constrained boundary represents the recommended operating cutoff.
+Underwriting decisions require balancing credit risk, portfolio growth, and capital constraints. We evaluate each score cutoff on Expected Profit and Risk-Adjusted Return on Capital (RAROC), with expected loss (at the approved-population bad rate) and a __COST_OF_CAPITAL__ cost-of-capital charge on economic capital both netted out. On this portfolio the unconstrained profit-maximising \emph{and} RAROC-maximising cutoff coincide at __CORNER_DESC__, at a portfolio RAROC of \textbf{__CORNER_RAROC__}. Because __CORNER_IMPLICATION__, the decision problem is formulated as a \emph{constrained} optimization: we maximize approved volume and expected profit subject to an active risk-appetite ceiling on the approved bad rate (\textbf{__MAX_BAD_RATE__}), taking the most inclusive cutoff (maximising approved profit) whose approved bad rate stays within that ceiling. This constrained boundary represents the recommended operating cutoff.
 
 We sweep score cutoffs from 400 to 800 (evaluating approved loan subsets) to calculate Expected Profit and RAROC. All components are expressed on a consistent \emph{per-annum} basis:
 \begin{itemize}
@@ -1832,7 +2098,7 @@ Table~\ref{tab:cutoff_raroc} displays the optimization results across selected s
 
 __CUTOFF_RAROC_TABLE__
 
-As shown in the table, the recommended operating cutoff is score \textbf{__OPT_CUTOFF__} with an approval rate of \textbf{__OPT_APPROVAL__}, a bad rate of \textbf{__OPT_BAD__}, an expected profit of \textbf{\$__OPT_PROFIT_M__M}, and a RAROC of \textbf{__OPT_RAROC__} --- __RAROC_VS_HURDLE__ the __RAROC_HURDLE__ cost-of-capital hurdle. It is the most inclusive cutoff whose approved bad rate stays within the risk-appetite ceiling, and it appears as the highlighted row in Table~\ref{tab:cutoff_raroc} and is marked in Figure~\ref{fig:cutoff_profit}. A single objective drives the highlighted table row, the figure, and this text, so there is no discrepancy between the quoted cutoff and the swept grid. Relaxing the risk-appetite ceiling would move the cutoff toward the profit/RAROC corner (full approval); tightening it raises the cutoff and lowers approved volume.
+As shown in the table, the recommended operating cutoff is score \textbf{__OPT_CUTOFF__} with an approval rate of \textbf{__OPT_APPROVAL__}, a bad rate of \textbf{__OPT_BAD__}, an expected profit of \textbf{\$__OPT_PROFIT_M__M}, and a RAROC of \textbf{__OPT_RAROC__} --- __RAROC_VS_HURDLE__ the __RAROC_HURDLE__ cost-of-capital hurdle. It is the most inclusive cutoff whose approved bad rate stays within the risk-appetite ceiling, and it appears as the highlighted row in Table~\ref{tab:cutoff_raroc} and is marked in Figure~\ref{fig:cutoff_profit}. A single objective drives the highlighted table row, the figure, and this text, so there is no discrepancy between the quoted cutoff and the swept grid. Relaxing the risk-appetite ceiling lowers the cutoff and raises approved volume; tightening it raises the cutoff toward the near-zero-volume unconstrained corner. Note that RAROC is negative across the entire 400--800 grid, so \emph{no} cutoff on this book clears the __RAROC_HURDLE__ cost-of-capital hurdle --- the operating point is a risk-appetite compromise, not a profitable optimum.
 
 \begin{figure}[H]
 \centering
@@ -1859,8 +2125,8 @@ PD Scorecard
   & Non-monotonic relationships suppressed; mitigated by VIF screening. \\
 \addlinespace
 LGD Model
-  & Fractional logit on funded\_amnt proxy EAD.
-  & Ignores accrued interest; conservative bias accepted. \\
+  & Deployed severity model is the LightGBM challenger, selected on out-of-sample error; EAD proxied by funded\_amnt.
+  & Ignores accrued interest; loan-level $R^2$ is negative, so predictions are used for portfolio aggregates only. \\
 \addlinespace
 EAD
   & Closed-form annuity; zero prepayment assumption.
@@ -1884,9 +2150,24 @@ Reject Inference
 \subsection{Model Risk \& Limitations}
 The Lending Club dataset is limited to US consumer loans and may not generalize to corporate lending, small-business loans, or other international retail portfolios. Additionally, the dataset excludes collateral details, meaning the LGD model relies primarily on underwriting grades and debt-to-income (DTI) metrics.
 
+\subsection{Stage 3 Is a Hindsight Classification, and It Dominates the ECL}
+The single most material limitation of this engine concerns \emph{what the headline ECL figure actually measures}. IFRS~9 Stage~3 (credit-impaired) is normally identified by observed non-performance --- 90+ days past due at the reporting date. The LendingClub accepted-loan file is loan-level with no monthly delinquency panel, so no such observation exists. The implementation therefore classifies Stage~3 from the loan's \emph{terminal resolved status} --- the same variable used as the PD modelling target. Stage~3 membership is consequently known only with hindsight, and each Stage~3 loan is provisioned at $\text{LGD}\times\text{EAD}$ with PD forced to $1.0$, a quantity entirely insensitive to the PD model.
+
+The what-if calculator in Section~7.6 makes the resulting dominance measurable. Shocking LGD by $+10$pp moves the total ECL by __WHATIF_LGD_PCT__ and shocking EAD by $+15\%$ moves it by __WHATIF_EAD_PCT__ --- both exactly proportional, as they must be, since ECL is linear in each. But shocking PD by $+50\%$ moves it by only __WHATIF_PD50_PCT__. If a fraction $f$ of the ECL sits in the PD-independent Stage~3 term, a $+50\%$ PD shock produces a change of $0.5\,(1-f)$; the observed sensitivity therefore implies $f \approx$ __STAGE3_ECL_SHARE__ of the reported provision.
+
+In other words, the headline ECL is, to first order, \emph{realised defaults} $\times$ \emph{LGD} $\times$ \emph{EAD} --- an accounting identity computed with knowledge of the outcome --- and every forward-looking component of the engine (the macro regression, the Vasicek $Z$-shocks, the probability-weighted scenarios and the hazard term structure) moves only the residual. The Stage~1 and Stage~2 provisions, the ECL coverage ratio on the performing book, and the macro sensitivity analysis remain meaningful as relative comparisons; the absolute headline provision should not be read as a forward-looking estimate of losses on an unresolved portfolio. A production deployment on a live book, where Stage~3 is set by observed delinquency at the reporting date rather than by terminal outcome, would not have this property.
+
 \subsection{Known Model Limitations}
 \begin{itemize}
     \item \textbf{Stage 2 SICR Proxy:} To calculate the longitudinal 12-month stage transition matrix, we simulate the credit conditions 12 months ago by interpolating between the origination and current credit profiles. This proxy is approximate and can be refined with exact monthly reporting snapshots.
+    \item \textbf{No origination-date PD snapshot --- relative SICR trigger disabled:} IFRS~9's primary SICR test compares the current lifetime PD against the PD estimated \emph{at booking}. This dataset stores no booking-date model output, so no such snapshot exists. Rather than substitute the current PD for the origination PD --- which makes the ratio identically $1.0$ and silently disables the test while appearing to implement it --- the relative trigger is switched off and Stage~2 is driven by the absolute lifetime-PD threshold and the delinquency backstop alone. Reinstating it requires storing PD at booking, which is listed under Recommended Next Steps below.
+    \item \textbf{Delinquency backstop is an application-time proxy:} The implemented backstop is \texttt{delinq\_2yrs} $\geq 1$ --- delinquencies in the two years \emph{before} origination --- not the IFRS~9 standard 30+ DPD at the reporting date, which this data cannot support.
+    \item \textbf{Downturn LGD sits at the distribution cap:} The Basel downturn LGD is the 90th percentile of the \emph{realised} severity of loss-incurring defaults, which on this fully unsecured, non-revolving book is __DOWNTURN_LGD__ --- the upper bound of the $[0,1]$ range. It is a genuine empirical percentile rather than a modelled stress, and it cannot be exceeded, so the capital calculation carries no headroom above it for a severity worse than total loss.
+    \item \textbf{Hazard-model event timing:} The discrete-time hazard model is fitted on a person-period panel in which every default event is placed in the loan's \emph{final} month, because the data records no observed default date, and no censoring is applied. The estimated months-on-book slope is therefore partly an artefact of this construction, and that term structure is what drives the ECL sum.
+    \item \textbf{Portfolio aggregates are partly in-sample:} Expected Loss, Basel RWA and IFRS~9 ECL are computed over the combined train, in-time test and OOT partitions --- the same rows the scorecard, hazard and LGD models were fitted on. This is appropriate for provisioning a closed book but means the portfolio aggregates are not out-of-sample quantities; the out-of-sample evidence is the OOT discrimination and calibration in Section~7.
+    \item \textbf{Constant exposure inside the ECL sum:} $\text{LGD}(t)$ and $\text{EAD}(t)$ are held at their per-loan point estimates across the ECL horizon rather than re-amortised monthly, which is conservative for amortising loans.
+    \item \textbf{Degenerate macro scenario axes:} The Federal Funds Rate floors at 0.10\% in \emph{both} the upside and downside scenarios, so the two are identical on that axis, and CPI inflation carries no scenario delta at all (it sits at the sample mean in all three). Combined with the imposed positive sign prior on FEDFUNDS, a modelled recession --- which in practice brings rate cuts --- \emph{reduces} projected defaults through that channel. Only unemployment, GDP growth and house-price growth differentiate the scenarios materially.
+    \item \textbf{The ``baseline'' scenario maps to $Z = $ __BASELINE_Z__, not $Z=0$:} This is a property of the Vasicek conditional-PD function, whose value at $Z=0$ does not equal the unconditional PD; the projection intercept is recentred so the baseline reproduces the through-the-cycle default rate. Under the report-wide convention that $Z<0$ is adverse, the baseline therefore reads as mildly adverse even though it is the central expectation.
     \item \textbf{Categorical Feature Encoding:} Grade, term, employment length and home ownership are ordinal-encoded before WoE binning. Label ordering assumptions (e.g., A=1 through G=7) are reasonable but should be validated against observed default rates for each category.
     \item \textbf{DPD Roll-Rate Analysis (future work):} A monthly delinquency-bucket roll-rate transition matrix, the standard IFRS~9 monitoring-committee tool, is not produced here because the LendingClub accepted-loan file is loan-level with no monthly days-past-due panel. Building genuine roll-rates requires a monthly servicing snapshot feed, which is the recommended data extension for a production deployment.
 \end{itemize}
@@ -1973,7 +2254,7 @@ The pipeline is designed to be fully reproducible:
 \midrule
 Language & Python 3.11+ & Core language and scripting \\
 PD Underwriting & statsmodels Logit & Monotonic credit scorecard fitting \\
-LGD Modeling & statsmodels GLM (fractional logit) & Two-stage cure + severity modeling \\
+LGD Modeling & LightGBM (deployed); statsmodels GLM & Severity model selected out-of-sample; the two-stage cure + fractional-logit model is the benchmarked \emph{challenger} that was not deployed (Section~4.2) \\
 Challenger Model & LightGBM & Non-linear machine learning benchmark \\
 Survival PD Curves & Discrete-time hazard model & Monthly lifetime term structure modeling \\
 PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
@@ -2021,6 +2302,39 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__RAROC_VS_HURDLE__", raroc_vs_hurdle)
     latex_content = latex_content.replace("__MAX_BAD_RATE__", max_bad_rate_txt)
     latex_content = latex_content.replace("__CORNER_RAROC__", corner_raroc)
+    latex_content = latex_content.replace("__CORNER_DESC__", corner_desc)
+    latex_content = latex_content.replace("__CORNER_IMPLICATION__", corner_implication)
+    latex_content = latex_content.replace("__COST_OF_CAPITAL__", cost_of_capital_txt)
+    # Population counts / split shares — derived, never hard-coded (audit A5, A6)
+    latex_content = latex_content.replace("__N_ACCEPTED_FILE__", n_accepted_file)
+    latex_content = latex_content.replace("__N_RESOLVED__", n_resolved_outcome)
+    latex_content = latex_content.replace("__N_GREYZONE__", n_greyzone)
+    latex_content = latex_content.replace("__N_REJECTED_RAW__", n_rejected_raw)
+    latex_content = latex_content.replace("__N_MODELLING__", n_modelling)
+    latex_content = latex_content.replace("__PCT_TRAIN__", pct_train)
+    latex_content = latex_content.replace("__PCT_TEST__", pct_test)
+    latex_content = latex_content.replace("__PCT_OOT__", pct_oot)
+    latex_content = latex_content.replace("__TRAIN_BAD_RATE__", train_bad_rate)
+    latex_content = latex_content.replace("__TRAIN_GOOD_RATE__", train_good_rate)
+    latex_content = latex_content.replace("__OOT_BAD_RATE__", oot_bad_rate)
+    # Recalibration narrative — reflects whether a calibrator was actually attached (audit A1)
+    latex_content = latex_content.replace("__RECALIB_STATUS__", recalib_status)
+    latex_content = latex_content.replace("__RECALIB_PRODUCTION_NOTE__", recalib_production_note)
+    latex_content = latex_content.replace("__DOWNTURN_NOTE__", downturn_note)
+    latex_content = latex_content.replace("__LGD_UPLIFT_PP__", lgd_uplift_pp)
+    latex_content = latex_content.replace("__LGD_VAL_N__", lgd_val_n)
+    latex_content = latex_content.replace("__N_FEATURES_SC__", n_features_sc)
+    latex_content = latex_content.replace("__N_FEATURES_CH__", n_features_ch)
+    latex_content = latex_content.replace("__FEATURE_PARITY_NOTE__", feature_parity_note)
+    latex_content = latex_content.replace("__WHATIF_LGD_PCT__", whatif_lgd_pct)
+    latex_content = latex_content.replace("__WHATIF_EAD_PCT__", whatif_ead_pct)
+    latex_content = latex_content.replace("__WHATIF_PD50_PCT__", whatif_pd50_pct)
+    latex_content = latex_content.replace("__STAGE3_ECL_SHARE__", stage3_ecl_share)
+    latex_content = latex_content.replace("__BASELINE_Z__", baseline_z)
+    latex_content = latex_content.replace("__ML_VERDICT__", ml_verdict)
+    latex_content = latex_content.replace("__CHAMPION_RATIONALE__", champion_rationale)
+    latex_content = latex_content.replace("__CEILING_NOTE__", ceiling_note)
+    latex_content = latex_content.replace("__AB_DIRECTION__", ab_direction)
     latex_content = latex_content.replace("__GINI_TTD__", gini_ttd)
     latex_content = latex_content.replace("__GINI_SHIFT__", gini_shift)
     latex_content = latex_content.replace("__STRESS_EL__", stress_el)

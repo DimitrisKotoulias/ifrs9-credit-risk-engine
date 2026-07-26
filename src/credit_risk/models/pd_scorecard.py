@@ -449,6 +449,16 @@ class PDScorecard:
         """Attach an isotonic/Platt calibrator fitted on the test set."""
         self._calibrator = calibrator
 
+    @property
+    def has_calibrator(self) -> bool:
+        """True when a recalibration transform is actually applied by ``predict_proba``.
+
+        The report keys its calibration narrative off this: when it is False, every
+        reported PD --- including those feeding EL, RWA and IFRS 9 staging --- is raw
+        model output (docs/AUDIT.md finding A1).
+        """
+        return self._calibrator is not None
+
     # ── Utilities ──────────────────────────────────────────────────────────────
 
     @property

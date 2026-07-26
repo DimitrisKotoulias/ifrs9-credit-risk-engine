@@ -342,6 +342,155 @@ def check_recalibration_claim(tex_path: Path, metrics: dict, failures: list[str]
         )
 
 
+def check_recalibration_applied(tex_path: Path, metrics: dict, failures: list[str]) -> None:
+    """The report must not describe a recalibration that was never attached.
+
+    The calibrator is fitted only when the in-time test Hosmer-Lemeshow test rejects. When
+    it does not, ``predict_proba`` returns raw PDs and the before/after table is a
+    diagnostic. The shipped report previously claimed the transform was "applied to the OOT
+    set", "retained", and feeding EL/RWA/staging (docs/AUDIT.md finding A1).
+    """
+    cal = metrics.get("calibration") or {}
+    if cal.get("isotonic_applied") is None:
+        return
+    comp = metrics.get("calibration_comparison") or {}
+    applied = bool(comp.get("applied_in_production", cal.get("isotonic_applied", False)))
+    if applied:
+        return
+    text = tex_path.read_text(encoding="utf-8", errors="replace")
+    banned = [
+        "and applied to the OOT set",
+        "we retain the recalibrated PDs",
+        "corrected via the isotonic regression recalibration",
+    ]
+    for phrase in banned:
+        _check(
+            phrase not in text,
+            f"Report claims recalibration is deployed ({phrase!r}) but no calibrator is "
+            "attached to the production scorecard (calibration.isotonic_applied is false)",
+            failures,
+        )
+    _check(
+        cal.get("method_chosen") != "isotonic" or cal.get("isotonic_applied", False),
+        "metrics.json reports method_chosen='isotonic' while isotonic_applied is false; "
+        "record 'none' when nothing is attached",
+        failures,
+    )
+
+
+def check_cutoff_corner_direction(tex_path: Path, metrics: dict, failures: list[str]) -> None:
+    """"Approve everyone" wording is only valid if the unconstrained argmax really is
+    full approval. On a book where every grid RAROC is negative the argmax is the most
+    *exclusive* non-empty cutoff (docs/AUDIT.md finding A2)."""
+    corner = metrics.get("cutoff_raroc_max") or metrics.get("cutoff_profit_argmax") or {}
+    if not corner:
+        return
+    approval = float(corner.get("approval_rate", 0.0))
+    if approval >= 0.99:
+        return
+    text = tex_path.read_text(encoding="utf-8", errors="replace")
+    banned = [
+        "approving the entire through-the-door population",
+        "implies 100\\% approval",
+        "(full approval)",
+    ]
+    for phrase in banned:
+        _check(
+            phrase not in text,
+            f"Report describes the unconstrained cutoff corner as full approval ({phrase!r}) "
+            f"but the argmax row approves only {approval:.4%} of the population",
+            failures,
+        )
+
+
+def check_capital_charge_rate(tex_path: Path, metrics: dict, failures: list[str]) -> None:
+    """The charge netted out of expected profit is the cost of capital, not the RAROC
+    hurdle (docs/AUDIT.md finding A3)."""
+    coc = metrics.get("cutoff_cost_of_capital")
+    hurdle = metrics.get("cutoff_raroc_hurdle")
+    if coc is None or hurdle is None or abs(float(coc) - float(hurdle)) < 1e-9:
+        return
+    text = tex_path.read_text(encoding="utf-8", errors="replace")
+    hurdle_pct = f"{float(hurdle) * 100:.2f}\\%"
+    _check(
+        f"a {hurdle_pct} charge on economic capital" not in text,
+        f"Report states a {hurdle_pct} charge on economic capital, but the cost of capital "
+        f"actually charged is {float(coc) * 100:.2f}%",
+        failures,
+    )
+
+
+def check_population_counts(tex_path: Path, metrics: dict, failures: list[str]) -> None:
+    """Every large loan count in the prose must trace to a metrics.json population.
+
+    The abstract previously carried these as hard-coded literals, and the pipeline exposed
+    only a mis-named `n_accepted_raw` (actually the resolved-outcome count), so a drifted
+    figure could not be detected (docs/AUDIT.md finding A5).
+    """
+    n_train = int(metrics.get("n_train", 0))
+    n_test = int(metrics.get("n_test", 0))
+    n_oot = int(metrics.get("n_oot", 0))
+    n_resolved = int(metrics.get("n_resolved_outcome", metrics.get("n_accepted_raw", 0)))
+    n_modelling = n_train + n_test + n_oot
+    known = {
+        int(metrics.get("n_accepted_file", 0)),
+        n_resolved,
+        int(metrics.get("n_rejected_raw", 0)),
+        n_train,
+        n_test,
+        n_oot,
+        n_modelling,
+        max(0, n_resolved - n_modelling),  # grey-zone loans dropped by the split
+    }
+    known.discard(0)
+    if not known:
+        return
+    text = tex_path.read_text(encoding="utf-8", errors="replace")
+    # Comma-grouped integers with 2+ groups: portfolio-scale populations. Currency figures
+    # in this report are always prefixed with \$ (optionally followed by a minus sign), so
+    # they are stripped out first rather than matched around.
+    text_no_currency = re.sub(r"\\?\$-?\s?[\d,]+(?:\.\d+)?", " ", text)
+    for m in re.finditer(r"\b(\d{1,3}(?:,\d{3}){2,})\b", text_no_currency):
+        value = int(m.group(1).replace(",", ""))
+        # Only police the population range; monetary totals are billions and are checked
+        # by the identity tests instead.
+        if not (100_000 <= value <= 50_000_000):
+            continue
+        _check(
+            value in known,
+            f"Population count {m.group(1)} in the report does not match any metrics.json "
+            f"population {sorted(known)}",
+            failures,
+        )
+
+
+def check_challenger_feature_parity(metrics: dict, failures: list[str]) -> None:
+    """Champion and challenger must consume the same number of predictors.
+
+    ``PDChallenger`` used to silently drop requested features missing from the raw frame,
+    so the tree models trained on 13 of the scorecard's 15 predictors while the report
+    claimed parity (docs/AUDIT.md findings A12 / B2).
+    """
+    shap_rows = (metrics.get("challenger") or {}).get("shap_mean_abs") or []
+    if not shap_rows:
+        return
+    root = Path(__file__).resolve().parent.parent
+    sc_path = root / "outputs" / "scorecard_tables.json"
+    if not sc_path.exists():
+        return
+    with open(sc_path, encoding="utf-8") as f:
+        selected = json.load(f).get("selected_features", [])
+    if not selected:
+        return
+    _check(
+        len(shap_rows) == len(selected),
+        f"Challenger feature parity broken: challenger used {len(shap_rows)} features vs "
+        f"the scorecard's {len(selected)}; the champion/challenger comparison is not "
+        "like-for-like",
+        failures,
+    )
+
+
 def run_metric_checks(metrics: dict) -> None:
     """Run all metrics.json identity checks; raise QAError listing every failure."""
     failures: list[str] = []
@@ -355,6 +504,7 @@ def run_metric_checks(metrics: dict) -> None:
     check_vintage_pd_ratio(metrics, failures)
     check_es_ge_var(metrics, failures)
     check_benchmarks_sourced(failures)
+    check_challenger_feature_parity(metrics, failures)
     if failures:
         raise QAError(
             "Report QA failed (%d issue(s)):\n  - %s"
@@ -374,6 +524,10 @@ def run_tex_checks(tex_path: str | Path, metrics: dict | None = None) -> None:
     if metrics is not None:
         check_lgd_r2_consistency(path, metrics, failures)
         check_recalibration_claim(path, metrics, failures)
+        check_recalibration_applied(path, metrics, failures)
+        check_cutoff_corner_direction(path, metrics, failures)
+        check_capital_charge_rate(path, metrics, failures)
+        check_population_counts(path, metrics, failures)
     if failures:
         raise QAError(
             "Report QA failed (%d issue(s)):\n  - %s"

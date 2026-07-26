@@ -113,9 +113,13 @@ ifrs9:
   sicr_abs_threshold: 0.20   # absolute lifetime-PD level that triggers SICR (Stage 2)
   sicr_dpd_backstop: 30      # days past due backstop for Stage 2
   stage3_dpd: 90             # days past due for Stage 3
-  # Macro scenarios: probability-weighted
+  # Macro scenarios: probability-weighted.
   # Convention (Vasicek Eq. 15): macro_shock is the systematic factor Z.
   # Z < 0 = adverse shock (recession, higher hazard); Z > 0 = favourable shock.
+  # NOTE: these macro_shock values are a FALLBACK only. The pipeline derives the
+  # scenario Z-shocks from the fitted macro OLS model (fit_macro_model) and overrides
+  # them; they apply only when that regression cannot be fitted. The weights below ARE
+  # used in all cases.
   scenarios:
     baseline:
       weight: 0.50
@@ -126,7 +130,10 @@ ifrs9:
     downside:
       weight: 0.25
       macro_shock: -0.5       # negative Z = higher hazard (worse economy)
-  macro_gamma: 0.8            # γ: hazard scale = exp(γ * macro_shock)
+  # (removed) macro_gamma: the hazard macro overlay is a Vasicek single-factor
+  # transform, h_PiT = Phi((Phi^-1(h) - sqrt(rho)*Z)/sqrt(1-rho)), parameterised by the
+  # asset correlation rho — not an exp(gamma*Z) hazard scale. The gamma setting was never
+  # read by the model (docs/AUDIT.md finding B5).
   # Macro regression: charge-offs lag the cycle and origination underwriting drifts,
   # so the raw contemporaneous UNRATE coefficient can carry a spurious (negative) sign.
   macro_unrate_lag: 2              # quarters to lag macro series vs origination cohort

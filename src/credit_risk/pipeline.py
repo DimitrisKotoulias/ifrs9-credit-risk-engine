@@ -58,9 +58,13 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     n_train = len(df_train)
     n_test = len(df_test)
     n_oot = len(df_oot)
-    # Real portfolio counts derived from the loaded data (was: hardcoded literals).
-    # full_accepted is every accepted loan pre-leakage-filter; df_rejected is all rejects.
-    n_accepted_raw = len(split.full_accepted) if split.full_accepted is not None else (n_train + n_test + n_oot)
+    # Three distinct populations, reported separately so the report can never conflate
+    # them (docs/AUDIT.md finding A5):
+    #   n_accepted_file  - rows in the accepted-loans source file
+    #   n_resolved       - loans with a resolved good/bad outcome (post target definition)
+    #   n_modelling      - train + test + OOT, i.e. n_resolved minus the excluded grey zone
+    n_accepted_file = int(getattr(split, "n_accepted_file", 0)) or (n_train + n_test + n_oot)
+    n_resolved = len(split.full_accepted) if split.full_accepted is not None else (n_train + n_test + n_oot)
     n_rejected_raw = len(df_rejected)
     logger.info("Train=%d, Test=%d, OOT=%d", len(df_train), len(df_test), len(df_oot))
 
@@ -205,11 +209,17 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             scorecard.set_calibrator(platt_cal)
             val_metrics["calibration"]["method_chosen"] = "platt"
             pd_oot_calibrated = platt_cal.predict_proba(_pd_oot_arr.reshape(-1, 1))[:, 1]
-        else:
-            if calibrator is not None:
-                scorecard.set_calibrator(calibrator)
+        elif calibrator is not None:
+            scorecard.set_calibrator(calibrator)
             val_metrics["calibration"]["method_chosen"] = "isotonic"
-            pd_oot_calibrated = np.clip(calibrator.transform(_pd_oot_arr), 1e-8, 1 - 1e-8) if calibrator is not None else _pd_oot_arr
+            pd_oot_calibrated = np.clip(calibrator.transform(_pd_oot_arr), 1e-8, 1 - 1e-8)
+        else:
+            # Neither candidate is attached: the isotonic branch only exists when the
+            # in-time test HL test rejected, and Platt did not beat the raw PDs. Record
+            # "none" so metrics.json cannot claim a method that was never deployed
+            # (docs/AUDIT.md finding A19).
+            val_metrics["calibration"]["method_chosen"] = "none"
+            pd_oot_calibrated = _pd_oot_arr
             
         logger.info(
             "Calibration choice: %s (platt_brier=%.4f, iso_brier=%.4f)",
@@ -240,6 +250,9 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
 
         val_metrics["calibration_comparison"] = {
             "recalibration_fit_on": "in_time_test",
+            # Whether the transform below is actually deployed on the production
+            # scorecard, or is a diagnostic only. The report keys its narrative off this.
+            "applied_in_production": scorecard.has_calibrator,
             "before": {
                 "auc": float(val_metrics["discrimination"]["oot"]["auc"]),
                 "brier": brier_before,
@@ -285,8 +298,17 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         "n_train": int(n_train),
         "n_test": int(n_test),
         "n_oot": int(n_oot),
-        "n_accepted_raw": int(n_accepted_raw),
+        "n_accepted_file": int(n_accepted_file),
+        "n_resolved_outcome": int(n_resolved),
+        # Retained for backward compatibility with existing consumers. Historically this
+        # key held the resolved-outcome count despite its name.
+        "n_accepted_raw": int(n_resolved),
         "n_rejected_raw": int(n_rejected_raw),
+        # Split composition — the report derives its percentages from these rather than
+        # carrying hard-coded literals (docs/AUDIT.md findings A5, A6).
+        "train_bad_rate": float(y_train.mean()),
+        "test_bad_rate": float(y_test.mean()),
+        "oot_bad_rate": float(y_oot.mean()),
         "underwriting_scorecard": {
             "train": disc_train_uw,
             "test": disc_test_uw,
@@ -316,18 +338,43 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     logger.info("=== Phase 2b: Challenger Model ===")
     try:
         from credit_risk.models.pd_challenger import PDChallenger  # noqa: PLC0415
+        from credit_risk.models.pd_scorecard import (  # noqa: PLC0415
+            _add_interaction_features, _encode_categoricals,
+        )
         from credit_risk.validation.discrimination import compute_discrimination  # noqa: PLC0415
+
+        # The scorecard's selected predictors include columns engineered inside
+        # PDScorecard.fit (grade_enc, term_enc, interaction terms). Those are absent from
+        # the raw frames, so the challengers must be handed the same engineered frames or
+        # they silently train on a smaller feature set and the comparison is unfair
+        # (docs/AUDIT.md A12 / B2). PDChallenger now raises rather than filtering.
+        def _prep_features(frame: pd.DataFrame) -> pd.DataFrame:
+            return _encode_categoricals(_add_interaction_features(frame))
+
+        df_train_ch = _prep_features(df_train)
+        df_test_ch = _prep_features(df_test)
+        df_oot_ch = _prep_features(df_oot)
+        _missing_ch = [f for f in scorecard.feature_names if f not in df_train_ch.columns]
+        if _missing_ch:
+            raise ValueError(
+                f"Challenger feature parity broken: {_missing_ch} not produced by feature "
+                "engineering; champion/challenger comparison would not be like-for-like."
+            )
+        logger.info(
+            "Challenger feature parity: %d scorecard predictors available to challengers.",
+            len(scorecard.feature_names),
+        )
 
         challenger = PDChallenger(seed=seed)
         challenger.fit(
-            df_train, y_train,
-            df_test, y_test,
+            df_train_ch, y_train,
+            df_test_ch, y_test,
             feature_names=scorecard.feature_names,
         )
         challenger.save(outputs / "challenger.pkl")
 
-        ch_pd_test = challenger.predict_proba(df_test)
-        ch_pd_oot = challenger.predict_proba(df_oot)
+        ch_pd_test = challenger.predict_proba(df_test_ch)
+        ch_pd_oot = challenger.predict_proba(df_oot_ch)
         ch_disc_test = compute_discrimination(y_test.values, np.asarray(ch_pd_test, dtype=float), label="challenger_test")
         ch_disc_oot = compute_discrimination(y_oot.values, np.asarray(ch_pd_oot, dtype=float), label="challenger_oot")
 
@@ -373,8 +420,8 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             logger.info("Training Multi-Model ML Benchmark...")
             benchmark = PDMultiModelBenchmark(seed=seed)
             benchmark.fit(
-                df_train, y_train,
-                df_test, y_test,
+                df_train_ch, y_train,
+                df_test_ch, y_test,
                 feature_names=scorecard.feature_names,
             )
 
@@ -382,17 +429,17 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             sc_pd_test = np.asarray(pd_test, dtype=float)
             sc_pd_oot = np.asarray(pd_oot, dtype=float)
 
-            lgb_pd_test = benchmark.predict_proba_lgb(df_test)
-            lgb_pd_oot = benchmark.predict_proba_lgb(df_oot)
+            lgb_pd_test = benchmark.predict_proba_lgb(df_test_ch)
+            lgb_pd_oot = benchmark.predict_proba_lgb(df_oot_ch)
 
-            xgb_pd_test = benchmark.predict_proba_xgb(df_test)
-            xgb_pd_oot = benchmark.predict_proba_xgb(df_oot)
+            xgb_pd_test = benchmark.predict_proba_xgb(df_test_ch)
+            xgb_pd_oot = benchmark.predict_proba_xgb(df_oot_ch)
 
-            rf_pd_test = benchmark.predict_proba_rf(df_test)
-            rf_pd_oot = benchmark.predict_proba_rf(df_oot)
+            rf_pd_test = benchmark.predict_proba_rf(df_test_ch)
+            rf_pd_oot = benchmark.predict_proba_rf(df_oot_ch)
 
-            ens_pd_test = benchmark.predict_proba_ensemble(df_test, sc_pd_test)
-            ens_pd_oot = benchmark.predict_proba_ensemble(df_oot, sc_pd_oot)
+            ens_pd_test = benchmark.predict_proba_ensemble(df_test_ch, sc_pd_test)
+            ens_pd_oot = benchmark.predict_proba_ensemble(df_oot_ch, sc_pd_oot)
 
             # Compute metrics
             sc_disc_test = compute_discrimination(y_test.values, sc_pd_test, label="sc_test")
@@ -468,7 +515,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
 
         # SHAP summary for challenger
         try:
-            _shap_sample = df_oot.sample(min(10_000, len(df_oot)), random_state=seed)
+            _shap_sample = df_oot_ch.sample(min(10_000, len(df_oot_ch)), random_state=seed)
             _shap_df = challenger.shap_summary(_shap_sample)
             if not _shap_df.empty:
                 metrics["challenger"]["shap_mean_abs"] = _shap_df.to_dict(orient="records")
@@ -517,7 +564,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                     if len(_bureau_feats) >= 3:
                         _challenger_bureau = PDChallenger(seed=seed)
                         _challenger_bureau.fit(
-                            df_train, y_train, df_test, y_test,
+                            df_train_ch, y_train, df_test_ch, y_test,
                             feature_names=_bureau_feats,
                         )
                         _shap_bureau_df = _challenger_bureau.shap_summary(_shap_sample)
@@ -525,8 +572,20 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                             metrics["challenger"]["shap_mean_abs_bureau"] = (
                                 _shap_bureau_df.to_dict(orient="records")
                             )
-                            plot_shap_comparison(_shap_df, _shap_bureau_df, _shap_fig_dir)
-                            logger.info("Dual SHAP (full vs bureau) figure saved.")
+                            # Only worth plotting if the two views genuinely differ. When
+                            # the price features were already missing from the challenger's
+                            # feature set, the "bureau-only" model was identical to the full
+                            # one and the figure was two identical panels
+                            # (docs/AUDIT.md finding A20).
+                            if set(_shap_bureau_df["feature"]) == set(_shap_df["feature"]):
+                                logger.warning(
+                                    "Dual SHAP skipped (non-fatal): bureau-only feature set "
+                                    "is identical to the full set, so the comparison figure "
+                                    "would show the same model twice."
+                                )
+                            else:
+                                plot_shap_comparison(_shap_df, _shap_bureau_df, _shap_fig_dir)
+                                logger.info("Dual SHAP (full vs bureau) figure saved.")
                 except Exception as _shap2_err:  # noqa: BLE001
                     logger.warning("Dual SHAP comparison failed (non-fatal): %s", _shap2_err)
 
@@ -888,10 +947,14 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     lgd_arr = df_rwa["lgd_pred"].values if "lgd_pred" in df_rwa.columns else np.full(len(df_rwa), 0.45)
     ead_arr = df_rwa["ead"].values
 
-    # Compute origination lifetime PD proxy for SICR staging.
-    # We approximate origination PD using the current scorecard 12m PD scaled
-    # by the loan term, since we have no separate origination snapshot.
-    pd_12m_orig = np.asarray(df_rwa["pd_pred"].values, dtype=float)
+    # Term-scaled lifetime PD from the scorecard's 12-month PD. NOTE: this is the
+    # CURRENT PD, not an origination snapshot — the dataset carries no booking-date PD.
+    # It is used for the stage-migration reconstruction below (where it is explicitly an
+    # interpolation input), but it is NOT passed to assign_stages as `pd_orig_lifetime`:
+    # doing so made the relative SICR ratio a comparison of two different models' PDs at
+    # the same date, which measures model disagreement rather than credit deterioration
+    # (docs/AUDIT.md finding B4).
+    pd_12m_current_sc = np.asarray(df_rwa["pd_pred"].values, dtype=float)
     if "term" in df_rwa.columns:
         term_months = (
             pd.to_numeric(
@@ -904,11 +967,15 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     else:
         term_months = np.full(len(df_rwa), 36.0)
     term_years = np.clip(term_months / 12.0, 1.0, 5.0)
-    pd_orig_lifetime = 1.0 - (1.0 - np.clip(pd_12m_orig, 1e-9, 1 - 1e-9)) ** term_years
+    pd_lifetime_sc = 1.0 - (1.0 - np.clip(pd_12m_current_sc, 1e-9, 1 - 1e-9)) ** term_years
 
+    # No genuine origination-date PD exists, so the relative SICR trigger is not
+    # evaluable. Passing None skips it honestly; the absolute-threshold and delinquency
+    # backstop triggers still fire inside assign_stages.
+    metrics["sicr_relative_trigger_available"] = False
     df_ecl = run_ifrs9_ecl(
         df_rwa, hazard_model, lgd_arr, ead_arr,
-        cfg=ifrs9_cfg, pd_orig_lifetime=pd_orig_lifetime,
+        cfg=ifrs9_cfg, pd_orig_lifetime=None,
     )
     df_ecl.to_parquet(outputs / "ecl.parquet", index=False)
 
@@ -955,18 +1022,18 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         mob_months = ((reporting_d - issue_d_dt).dt.days / 30.44).fillna(0.0).values
 
         pd_12m_current = df_rwa["pd_pred"].values
-        pd_12m_t0 = 0.5 * pd_12m_orig + 0.5 * pd_12m_current
+        # Interpolated t-12 credit profile. Both terms are the current PD (no historical
+        # snapshot exists), so this is a smoothing device, not an observed history.
+        pd_12m_t0 = 0.5 * pd_12m_current_sc + 0.5 * pd_12m_current
         term_num = pd.to_numeric(df_rwa["term"].astype(str).str.extract(r"(\d+)")[0], errors="coerce").fillna(36.0).values
         rem_term_t0 = np.clip(term_num - (mob_months - 12), 1.0, term_num)
         pd_lifetime_t0 = 1.0 - (1.0 - np.clip(pd_12m_t0, 1e-9, 1.0 - 1e-9)) ** (rem_term_t0 / 12.0)
 
-        pd_ratio_t0 = pd_lifetime_t0 / np.clip(pd_orig_lifetime, 1e-9, 1.0)
-        relative_sicr_t0 = pd_ratio_t0 > ifrs9_cfg.sicr.pd_multiplier
         absolute_sicr_t0 = pd_lifetime_t0 > ifrs9_cfg.sicr.abs_threshold
 
         _stages_t0 = np.ones(len(df_rwa), dtype=int)
         active_12m_ago = mob_months >= 12
-        _stages_t0[active_12m_ago & (relative_sicr_t0 | absolute_sicr_t0)] = 2
+        _stages_t0[active_12m_ago & absolute_sicr_t0] = 2
 
         # Current stages from ECL output. Fallback (only if df_ecl lacks a
         # "stage" column) must pass a genuine CURRENT lifetime PD, not
@@ -975,7 +1042,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # only the absolute-threshold/DPD backstop able to fire.
         _pd_current_lifetime = 1.0 - (1.0 - np.clip(pd_12m_current, 1e-9, 1 - 1e-9)) ** term_years
         _stages_current = df_ecl["stage"].values if "stage" in df_ecl.columns else assign_stages(
-            df_rwa, _pd_current_lifetime, pd_orig_lifetime, ifrs9_cfg.sicr
+            df_rwa, _pd_current_lifetime, None, ifrs9_cfg.sicr
         )
         _migration = stage_migration_matrix(_stages_t0, _stages_current)
         metrics["ifrs9_stage_migration"] = {
@@ -1115,11 +1182,13 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             metrics["cutoff_strategy_table"] = cutoff_strategy
             logger.info("RAROC cutoff strategy sweep complete: %d cutoffs.", len(cutoff_strategy))
 
-            # Disclosure: unconstrained optima over the fine grid. On this risk-priced
-            # high-yield book both the total-profit argmax and the RAROC argmax are the
-            # corner solution "approve everyone" — the expected-loss (at the through-the-door
-            # bad rate) and the economic-capital charge are already netted, so this is a
-            # genuine economic result, not under-penalised tail risk.
+            # Disclosure: unconstrained optima over the fine grid. Both the total-profit
+            # argmax and the RAROC argmax are corner solutions; WHICH corner is empirical.
+            # Expected loss (at the approved bad rate) and the economic-capital charge are
+            # both netted out, so when every grid RAROC comes out negative the argmax is
+            # the most EXCLUSIVE non-empty cutoff (a near-zero-volume book), not "approve
+            # everyone". The report derives its wording from approval_rate rather than
+            # asserting either case (docs/AUDIT.md finding A2).
             _nonempty = [r for r in cutoff_strategy if r["approval_rate"] > 0.0]
             if _nonempty:
                 _argmax_row = max(_nonempty, key=lambda r: r["expected_profit"])
@@ -1135,6 +1204,10 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                 metrics["cutoff_optimal_profit"] = dict(_opt_row)
                 metrics["cutoff_raroc_hurdle"] = float(_hurdle)
                 metrics["cutoff_max_bad_rate"] = float(_max_bad)
+                # The rate actually charged against economic capital in the profit
+                # calculation. Distinct from the hurdle, which is only the comparison
+                # threshold (docs/AUDIT.md finding A3).
+                metrics["cutoff_cost_of_capital"] = float(_coc)
                 # Headline cutoff metrics come from the risk-appetite operating cutoff.
                 metrics["optimal_cutoff_threshold"] = float(_opt_row["cutoff"])
                 metrics["optimal_approval_rate"] = float(_opt_row["approval_rate"])
@@ -1249,7 +1322,18 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         stressed_k = irb_capital_requirement(pd_stress, np.full(len(df_all), stressed_lgd), pd_floor=cfg.basel.pd_floor)
         stressed_rwa_arr = irb_rwa(pd_stress, np.full(len(df_all), stressed_lgd), df_all["ead"].values, pd_floor=cfg.basel.pd_floor)
         
-        metrics["stress_el"] = float((pd_stress * stressed_lgd * df_all["ead"].values).sum())
+        # Isolate the PD effect: base EL uses the per-loan predicted LGD, so the stressed
+        # EL must too, or the reported increase silently blends in an LGD switch
+        # (docs/AUDIT.md finding B6). The downturn LGD stays where it belongs — in the
+        # capital calculation, which uses it in the base case as well.
+        _lgd_for_el = (
+            df_all["lgd_pred"].values if "lgd_pred" in df_all.columns
+            else np.full(len(df_all), stressed_lgd)
+        )
+        metrics["stress_el"] = float((pd_stress * _lgd_for_el * df_all["ead"].values).sum())
+        metrics["stress_el_downturn_lgd"] = float(
+            (pd_stress * stressed_lgd * df_all["ead"].values).sum()
+        )
         metrics["stress_rwa"] = float(stressed_rwa_arr.sum())
         metrics["stress_capital_req"] = float(stressed_rwa_arr.sum() * 0.08)
         

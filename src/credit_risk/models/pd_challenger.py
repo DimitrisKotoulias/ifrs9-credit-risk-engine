@@ -17,6 +17,38 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def _resolve_features(
+    feature_names: list[str] | None,
+    X_train: pd.DataFrame,
+    model_label: str,
+) -> list[str]:
+    """Resolve the feature list, refusing to silently drop requested columns.
+
+    Requested features that are absent from the frame used to be filtered out here. That
+    made the champion-vs-challenger comparison quietly unfair: the scorecard's engineered
+    columns (e.g. ``grade_enc``, ``term_enc``) are produced inside ``PDScorecard.fit`` and
+    are missing from the raw training frame, so the challengers trained on a strictly
+    smaller feature set than the champion while the report claimed parity
+    (docs/AUDIT.md findings A12 / B2). Callers must engineer those columns first.
+    """
+    if feature_names is None:
+        feature_names = list(X_train.select_dtypes(include="number").columns)
+
+    # Target/date columns are legitimately excluded, never silently.
+    exclude = {"target", "loan_status", "issue_d"}
+    requested = [f for f in feature_names if f not in exclude]
+    missing = [f for f in requested if f not in X_train.columns]
+    if missing:
+        raise ValueError(
+            f"{model_label}: {len(missing)} requested feature(s) are absent from the "
+            f"training frame: {missing}. Engineer them before fitting (see "
+            "`_add_interaction_features` / `_encode_categoricals` in models.pd_scorecard) "
+            "rather than fitting on a reduced set - that would make the champion/"
+            "challenger comparison unfair."
+        )
+    return requested
+
+
 class PDChallenger:
     """LightGBM challenger for the PD scorecard.
 
@@ -69,12 +101,7 @@ class PDChallenger:
         """
         import lightgbm as lgb  # noqa: PLC0415
 
-        if feature_names is None:
-            feature_names = list(X_train.select_dtypes(include="number").columns)
-
-        # Drop target/date columns if accidentally included
-        exclude = {"target", "loan_status", "issue_d"}
-        feature_names = [f for f in feature_names if f not in exclude and f in X_train.columns]
+        feature_names = _resolve_features(feature_names, X_train, "PDChallenger")
         self._feature_names = feature_names
 
         X_tr = X_train[feature_names].astype(float)
@@ -225,11 +252,7 @@ class PDMultiModelBenchmark:
         import xgboost as xgb  # noqa: PLC0415
         from sklearn.ensemble import RandomForestClassifier  # noqa: PLC0415
 
-        if feature_names is None:
-            feature_names = list(X_train.select_dtypes(include="number").columns)
-
-        exclude = {"target", "loan_status", "issue_d"}
-        feature_names = [f for f in feature_names if f not in exclude and f in X_train.columns]
+        feature_names = _resolve_features(feature_names, X_train, "PDMultiModelBenchmark")
         self._feature_names = feature_names
 
         X_tr = X_train[feature_names].astype(float)

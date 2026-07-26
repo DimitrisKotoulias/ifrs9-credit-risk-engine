@@ -83,7 +83,6 @@ class IFRS9Config(BaseModel):
     sicr_dpd_backstop: int = 30
     stage3_dpd: int = 90
     scenarios: dict[str, MacroScenario]
-    macro_gamma: float = 0.8
     macro_unrate_lag: int = 2          # quarters to lag macro vs origination cohort
     macro_enforce_sign_priors: bool = True  # impose economic signs on scenario projection
 

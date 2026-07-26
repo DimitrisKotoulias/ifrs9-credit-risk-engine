@@ -145,9 +145,15 @@ def optimal_cutoff(sweep_df: pd.DataFrame) -> dict[str, object]:
 def raroc_argmax_cutoff(cutoff_strategy: list[dict]) -> dict | None:
     """Cutoff that maximises portfolio RAROC over the swept grid.
 
-    On a risk-priced book this is typically the most inclusive cutoff (higher-risk
-    grades carry high enough interest to stay RAROC-accretive), i.e. a corner. It
-    is reported for context alongside the risk-appetite operating cutoff.
+    Which corner this lands on is an empirical property of the book, not a given. If
+    higher-risk grades are priced richly enough to stay RAROC-accretive, the argmax is the
+    most *inclusive* cutoff. If instead every cutoff on the grid returns a negative RAROC,
+    the argmax is the most *exclusive* non-empty cutoff — the smallest, best-quality
+    approved book — which is a vacuous operating point rather than a profitable one.
+    Callers must read `approval_rate` off the returned row before describing it, and must
+    not assume the inclusive case (docs/AUDIT.md finding A2).
+
+    Reported for context alongside the risk-appetite operating cutoff.
     """
     eligible = [r for r in cutoff_strategy if r.get("approval_rate", 0.0) > 0.0]
     if not eligible:
@@ -162,9 +168,9 @@ def risk_appetite_cutoff(
 ) -> dict | None:
     """Recommended operating cutoff under a board bad-rate risk-appetite ceiling.
 
-    Unconstrained profit/RAROC maximisation on a high-yield book approves the
-    entire population (a corner). The operational cutoff is instead the most
-    inclusive threshold (lowest score, hence highest approved volume and profit)
+    Unconstrained profit/RAROC maximisation returns a corner solution (see
+    `raroc_argmax_cutoff` — which corner depends on the book). The operational cutoff is
+    instead the most inclusive threshold (lowest score, hence highest approved volume)
     whose approved-population bad rate stays within the risk-appetite ceiling ---
     i.e. profit maximisation subject to ``bad_rate <= max_bad_rate``. Because the
     approved bad rate rises monotonically as the cutoff is lowered, this yields a

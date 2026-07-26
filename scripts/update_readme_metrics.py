@@ -13,6 +13,7 @@ can silently drift from the last real pipeline run.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -48,6 +49,43 @@ def _money(value: object) -> str:
     if abs(v) >= 1e6:
         return f"${v / 1e6:.2f}m"
     return f"${v:,.0f}"
+
+
+def _compact_count(value: object) -> str:
+    """Human-scale loan count, e.g. 1,369,566 -> 1.37M."""
+    n = _num(value)
+    if n >= 1e6:
+        return f"{n / 1e6:.2f}M"
+    if n >= 1e3:
+        return f"{n / 1e3:.0f}k"
+    return f"{int(n):,}"
+
+
+def update_headline_counts(readme: str, metrics: dict) -> str:
+    """Rewrite the two loan-count claims that sit outside the metrics table.
+
+    These were hard-coded at 2.26M while the pipeline actually loads a different number
+    (docs/AUDIT.md finding A5), so they are now regenerated from metrics.json like
+    everything else in the Key Results block.
+    """
+    accepted = _compact_count(metrics.get("n_accepted_raw"))
+    modelling = _compact_count(
+        _num(metrics.get("n_train")) + _num(metrics.get("n_test")) + _num(metrics.get("n_oot"))
+    )
+    readme = re.sub(
+        r"(3-stage IFRS 9 ECL \u2014 on )[\d.,]+[MkK]?( Lending Club loans)",
+        lambda m: f"{m.group(1)}{accepted}{m.group(2)}",
+        readme,
+    )
+    readme = re.sub(
+        r"(Latest full real-data run \(Lending Club 2007\u20132018, )[^)]*\)",
+        lambda m: (
+            f"{m.group(1)}~{accepted} accepted loans; {modelling} with a resolved "
+            "good/bad outcome form the modelling population)"
+        ),
+        readme,
+    )
+    return readme
 
 
 def build_table(metrics: dict) -> str:
@@ -118,6 +156,7 @@ def main() -> int:
     pre, rest = readme.split(START_MARKER, 1)
     _, post = rest.split(END_MARKER, 1)
     new_readme = f"{pre}{START_MARKER}\n{table}\n{END_MARKER}{post}"
+    new_readme = update_headline_counts(new_readme, metrics)
     README_PATH.write_text(new_readme, encoding="utf-8")
     print(f"README.md Key Results table regenerated from {METRICS_PATH}")
     return 0

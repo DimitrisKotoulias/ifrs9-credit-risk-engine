@@ -191,10 +191,13 @@ class LGDModel:
             self._severity_type = "ridge"
             logger.warning("LGD: not enough severity examples; skipping severity stage.")
 
-        # Downturn LGD
+        # Downturn LGD — percentile of the REALISED severity distribution, not of the
+        # model's fitted values. Predictions are shrunk toward the conditional mean, so a
+        # percentile taken over them yields a near-vacuous uplift over mean LGD and does
+        # not represent a downturn stress (docs/AUDIT.md finding B3).
         all_preds = self.predict(df_defaults)
-        loss_preds = all_preds[lgd_series > 0]
-        self._downturn_lgd = float(np.percentile(loss_preds, self.downturn_percentile))
+        realised_loss = lgd_series[lgd_series > 0]
+        self._downturn_lgd = self._downturn_from_realised(realised_loss, all_preds, lgd_series)
         self._mean_lgd = float(all_preds.mean())
 
         logger.info(
@@ -206,6 +209,29 @@ class LGDModel:
         self._fit_challenger(X_scaled, lgd_series)
 
         return self
+
+    def _downturn_from_realised(
+        self,
+        realised_loss: pd.Series,
+        all_preds: pd.Series,
+        lgd_series: pd.Series,
+    ) -> float:
+        """Downturn LGD = percentile of the realised severity of loss-incurring defaults.
+
+        Basel downturn LGD is meant to capture the severity actually observed in adverse
+        conditions. Taking the percentile over model predictions instead measures only the
+        spread of the fitted values, which regression shrinkage makes far narrower than the
+        realised distribution. Floors at the mean predicted LGD so the downturn figure can
+        never sit below the central estimate it is supposed to stress.
+        """
+        if len(realised_loss) == 0:
+            fallback = all_preds[lgd_series > 0]
+            if len(fallback) == 0:
+                return float(all_preds.mean()) if len(all_preds) else 0.0
+            return float(np.percentile(fallback, self.downturn_percentile))
+        downturn = float(np.percentile(realised_loss, self.downturn_percentile))
+        mean_pred = float(all_preds.mean()) if len(all_preds) else 0.0
+        return float(np.clip(max(downturn, mean_pred), 0.0, 1.0))
 
     def _fit_challenger(self, X_scaled: np.ndarray, lgd: pd.Series) -> None:
         try:
@@ -264,9 +290,9 @@ class LGDModel:
         self._use_challenger = True
         lgd_series = compute_realised_lgd(df_defaults)
         preds = self.predict(df_defaults)
-        loss_preds = preds[lgd_series > 0]
-        if len(loss_preds) > 0:
-            self._downturn_lgd = float(np.percentile(loss_preds, self.downturn_percentile))
+        self._downturn_lgd = self._downturn_from_realised(
+            lgd_series[lgd_series > 0], preds, lgd_series
+        )
         self._mean_lgd = float(preds.mean())
         logger.info("LGD challenger promoted: mean=%.4f | downturn=%.4f",
                     self._mean_lgd, self._downturn_lgd)

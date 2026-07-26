@@ -7,8 +7,16 @@ Three-stage classification:
 
 SICR triggers:
     - Relative PD threshold: lifetime_pd > origination_lifetime_pd × sicr_pd_mult
+      (evaluated only when a genuine origination-date PD snapshot is supplied)
     - Absolute PD floor: lifetime_pd > sicr_abs_threshold
-    - 30+ DPD backstop (if delinquency info available)
+    - Delinquency backstop. The IFRS 9 standard backstop is 30+ DPD at the reporting
+      date; this dataset has no monthly servicing panel, so the implemented proxy is
+      `delinq_2yrs >= 1` — delinquencies recorded in the two years *before* origination.
+
+Stage 3 caveat: with no DPD panel, credit-impaired status is taken from the loan's
+terminal resolved outcome (the modelling target). Stage 3 is therefore a hindsight
+classification, and its ECL contribution (LGD × EAD, PD forced to 1) is insensitive to
+the PD model. See docs/AUDIT.md finding C1.
 
 ECL formula (Appendix C):
     ECL = Σ_t  MarginalPD(t) · LGD(t) · EAD(t) · DF(t)
@@ -106,7 +114,11 @@ def assign_stages(
     pd_lifetime:
         Current lifetime PD per loan.
     pd_orig_lifetime:
-        Lifetime PD at origination. If None, all go to Stage 1/3 only.
+        Lifetime PD at origination. Pass None when no genuine origination snapshot exists:
+        the *relative* SICR trigger is then skipped (it cannot be evaluated) while the
+        absolute-threshold and delinquency triggers still apply. Do not substitute the
+        current PD here — that makes the relative ratio identically 1.0 and silently
+        disables the trigger while appearing to implement it.
     sicr_cfg:
         SICR configuration.
     in_default:
@@ -131,14 +143,21 @@ def assign_stages(
 
     # Stage 2: SICR (only for non-default)
     non_default = ~default_mask
-    if pd_orig_lifetime is not None and non_default.any():
-        pd_orig = np.asarray(pd_orig_lifetime, dtype=float)
+    if non_default.any():
         pd_curr = np.asarray(pd_lifetime, dtype=float)
-        relative_sicr = pd_curr > pd_orig * sicr_cfg.pd_multiplier
-        absolute_sicr = pd_curr > sicr_cfg.abs_threshold
-        sicr_mask = non_default & (relative_sicr | absolute_sicr)
 
-        # 30+ DPD backstop
+        # Absolute lifetime-PD threshold — always evaluable.
+        sicr_mask = non_default & (pd_curr > sicr_cfg.abs_threshold)
+
+        # Relative trigger requires a genuine origination-date PD snapshot.
+        if pd_orig_lifetime is not None:
+            pd_orig = np.asarray(pd_orig_lifetime, dtype=float)
+            sicr_mask = sicr_mask | (non_default & (pd_curr > pd_orig * sicr_cfg.pd_multiplier))
+
+        # Delinquency backstop. NOTE: `delinq_2yrs` counts delinquencies in the two years
+        # *before* origination — an application-time bureau field, not a current-DPD
+        # measure. It is a documented proxy for the IFRS 9 30+ DPD backstop, which this
+        # dataset cannot support (no monthly servicing panel).
         if "delinq_2yrs" in df.columns:
             dpd_mask = non_default & (
                 pd.to_numeric(df["delinq_2yrs"], errors="coerce").fillna(0) >= 1
@@ -150,12 +169,46 @@ def assign_stages(
     return stages
 
 
+def term_horizon_mask(term_months: np.ndarray | None, n: int, horizon: int) -> np.ndarray | None:
+    """Boolean mask (n, horizon) that is True only for months within each loan's own term.
+
+    ``predict_term_structure`` sizes its output at the *portfolio* maximum term (up to
+    ``max_horizon``), so a 36-month loan is returned a 60-column row whose trailing columns
+    describe months that loan will never see. Summing them into lifetime ECL charges the
+    loan for defaults after it has been repaid. Returns None when no term information is
+    available, in which case the caller falls back to the full horizon.
+    """
+    if term_months is None:
+        return None
+    terms = np.asarray(term_months, dtype=float)
+    if terms.shape[0] != n:
+        return None
+    terms = np.clip(np.nan_to_num(terms, nan=float(horizon)), 1.0, float(horizon))
+    return np.arange(1, horizon + 1)[None, :] <= terms[:, None]
+
+
+def _term_months_from(df: pd.DataFrame, n: int) -> np.ndarray | None:
+    """Extract contractual term in months from the portfolio frame, if available."""
+    if "term_num" in df.columns:
+        terms = pd.to_numeric(df["term_num"], errors="coerce")
+    elif "term" in df.columns:
+        terms = pd.to_numeric(
+            df["term"].astype(str).str.extract(r"(\d+)")[0], errors="coerce"
+        )
+    else:
+        return None
+    if len(terms) != n:
+        return None
+    return terms.to_numpy(dtype=float)
+
+
 def compute_ecl_single_scenario(
     marginal_pd: np.ndarray,
     lgd_arr: np.ndarray,
     ead_arr: np.ndarray,
     eir_monthly: np.ndarray,
     stages: np.ndarray,
+    term_months: np.ndarray | None = None,
 ) -> np.ndarray:
     """Compute ECL per loan for a single macro scenario.
 
@@ -171,6 +224,9 @@ def compute_ecl_single_scenario(
         Monthly discount rate per loan.
     stages:
         IFRS 9 stage per loan.
+    term_months:
+        Contractual term in months per loan. When supplied, the lifetime sum is truncated
+        at each loan's own term instead of the portfolio-wide horizon.
 
     Returns
     -------
@@ -178,6 +234,13 @@ def compute_ecl_single_scenario(
     """
     n, horizon = marginal_pd.shape
     df_mat = _discount_factors(eir_monthly, horizon)
+
+    # Truncate each loan's horizon at its own contractual term: the term-structure matrix
+    # is sized at the portfolio maximum, so without this a 36-month loan accrues 60 months
+    # of marginal PD into its lifetime ECL.
+    mask = term_horizon_mask(term_months, n, horizon)
+    if mask is not None:
+        marginal_pd = np.where(mask, marginal_pd, 0.0)
 
     # ECL per time step: MarginalPD(t) × LGD × EAD × DF(t)
     lgd_col = lgd_arr[:, None]  # (n, 1)
@@ -254,6 +317,7 @@ def run_ifrs9_ecl(
     pd_lifetime = baseline_ts["pd_lifetime"]
     pd_12m = baseline_ts["pd_12m"]
 
+    term_months = _term_months_from(df, len(df))
     stages = assign_stages(df, pd_lifetime, pd_orig_lifetime, cfg.sicr)
     out["stage"] = stages
     out["pd_12m"] = pd_12m
@@ -264,7 +328,7 @@ def run_ifrs9_ecl(
     for scenario in cfg.scenarios:
         ts = hazard_model.predict_term_structure(df, macro_shock=scenario.macro_shock)
         ecl_s = compute_ecl_single_scenario(
-            ts["marginal_pd"], lgd, ead, eir_monthly, stages
+            ts["marginal_pd"], lgd, ead, eir_monthly, stages, term_months=term_months
         )
         out[f"ecl_{scenario.name}"] = ecl_s
         ecl_weighted += scenario.weight * ecl_s
@@ -348,10 +412,11 @@ def ecl_scenario_sensitivity(
     total_ead = ead.sum()
 
     rows = []
+    term_months = _term_months_from(df, len(df))
     for shock in macro_shocks:
         ts = hazard_model.predict_term_structure(df, macro_shock=shock)
         ecl = compute_ecl_single_scenario(
-            ts["marginal_pd"], lgd, ead, eir_monthly, stages
+            ts["marginal_pd"], lgd, ead, eir_monthly, stages, term_months=term_months
         )
         total_ecl = float(ecl.sum())
         rows.append({
@@ -423,10 +488,13 @@ def ecl_shock_sensitivity(
     lgd = np.asarray(lgd_arr, dtype=float)
     ead = np.asarray(ead_arr, dtype=float)
 
+    term_months = _term_months_from(df, len(df))
     base_ts = hazard_model.predict_term_structure(df, macro_shock=0.0)
     base_marginal = base_ts["marginal_pd"]
     base_ecl = float(
-        compute_ecl_single_scenario(base_marginal, lgd, ead, eir_monthly, stages).sum()
+        compute_ecl_single_scenario(
+            base_marginal, lgd, ead, eir_monthly, stages, term_months=term_months
+        ).sum()
     )
 
     rows = []
@@ -436,7 +504,9 @@ def ecl_shock_sensitivity(
         lgd_s = np.clip(lgd + float(shocks.get("lgd_add", 0.0)), 0.0, 1.0)
         ead_s = ead * float(shocks.get("ead_multiplier", 1.0))
         shocked = float(
-            compute_ecl_single_scenario(mp, lgd_s, ead_s, eir_monthly, stages).sum()
+            compute_ecl_single_scenario(
+                mp, lgd_s, ead_s, eir_monthly, stages, term_months=term_months
+            ).sum()
         )
         rows.append({
             "scenario": name,

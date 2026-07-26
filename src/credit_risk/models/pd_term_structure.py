@@ -2,10 +2,23 @@
 
 Computes marginal monthly PD, 12-month PD, and lifetime PD for each loan.
 
-Approach: logistic regression on months-on-book (MOB), grade, and optional
+Approach: logistic regression on months-on-book (MOB), grade, and an optional
 macro overlay. Hazard at each time step estimated from training default events.
 
-    h(t | x) = sigmoid(α₀ + α₁·MOB_t + x'·β + γ·macro_t)
+    h(t | x) = sigmoid(α₀ + α₁·MOB_t + α₂·MOB_t² + x'·β)
+
+The macro overlay is applied *after* the logistic fit, as a Vasicek single-factor
+transform of the fitted hazard (not as an extra regressor and not as an exp(γ·Z)
+scale factor):
+
+    h_PiT(t) = Φ( (Φ⁻¹(h(t)) − √ρ·Z) / √(1−ρ) )
+
+where Z is the systematic factor (Z < 0 = adverse). See `_apply_macro_shock`.
+
+Known limitation: the person-period dataset places every default event in the loan's
+final month (no observed default date exists in this data) and applies no censoring,
+so the estimated MOB slope is partly an artefact of that construction.
+See docs/AUDIT.md finding C4.
 
 Survival:
     S(t) = ∏_{s=1}^{t} (1 − h(s))
@@ -38,8 +51,8 @@ class DiscreteHazardModel:
     ----------
     max_horizon:
         Maximum months to project (caps at loan term).
-    macro_gamma:
-        Sensitivity to macro shock (multiplier on hazard scale).
+    asset_correlation:
+        Vasicek asset correlation ρ used by the macro overlay.
     seed:
         Random seed.
     """
@@ -47,12 +60,10 @@ class DiscreteHazardModel:
     def __init__(
         self,
         max_horizon: int = _MAX_HORIZON,
-        macro_gamma: float = 0.3,
         asset_correlation: float = 0.15,
         seed: int = 42,
     ) -> None:
         self.max_horizon = max_horizon
-        self.macro_gamma = macro_gamma
         self.asset_correlation = asset_correlation
         self.seed = seed
         self._model: LogisticRegression | None = None
@@ -161,29 +172,23 @@ class DiscreteHazardModel:
 
     # ── Prediction ─────────────────────────────────────────────────────────────
 
-    def _hazard_at_t(
-        self,
-        df: pd.DataFrame,
-        t: int,
-        macro_shock: float = 0.0,
-    ) -> np.ndarray:
-        """Hazard probability h(t) for each loan at month t."""
-        assert self._model is not None and self._scaler is not None
-        X = self._build_features(df, np.full(len(df), t, dtype=float))
-        X_scaled = self._scaler.transform(X)
-        h = self._model.predict_proba(X_scaled)[:, 1]
-        # Vasicek single factor credit cycle macro adjustment (Eq. 15):
-        # PD_PiT = Phi((Phi^-1(PD_TTC) - sqrt(rho)*Z) / sqrt(1-rho))
-        # Convention: macro_shock IS the systematic factor Z.
-        # Z < 0 = adverse shock (recession) -> higher PD; Z > 0 = favourable.
-        if macro_shock != 0.0:
-            from scipy.special import ndtr, ndtri
-            h_clipped = np.clip(h, 1e-9, 1 - 1e-9)
-            z_ttc = ndtri(h_clipped)
-            rho = self.asset_correlation
-            z_pit = (z_ttc - np.sqrt(rho) * macro_shock) / np.sqrt(1.0 - rho)
-            h = ndtr(z_pit)
-        return np.clip(h, 0.0, 1.0)
+    def _apply_macro_shock(self, h: np.ndarray, macro_shock: float) -> np.ndarray:
+        """Vasicek single-factor macro overlay on a fitted hazard.
+
+            h_PiT = Φ( (Φ⁻¹(h) − √ρ·Z) / √(1−ρ) )
+
+        Convention: ``macro_shock`` IS the systematic factor Z.
+        Z < 0 = adverse shock (recession) -> higher PD; Z > 0 = favourable.
+        """
+        if macro_shock == 0.0:
+            return np.clip(h, 0.0, 1.0)
+        from scipy.special import ndtr, ndtri  # noqa: PLC0415
+
+        h_clipped = np.clip(h, 1e-9, 1 - 1e-9)
+        z_ttc = ndtri(h_clipped)
+        rho = self.asset_correlation
+        z_pit = (z_ttc - np.sqrt(rho) * macro_shock) / np.sqrt(1.0 - rho)
+        return np.clip(ndtr(z_pit), 0.0, 1.0)
 
     def predict_term_structure(
         self,
@@ -226,16 +231,9 @@ class DiscreteHazardModel:
                 term,
             ])
             X_scaled = self._scaler.transform(X)
-            h_t = self._model.predict_proba(X_scaled)[:, 1]
-            if macro_shock != 0.0:
-                from scipy.special import ndtr, ndtri  # noqa: PLC0415
-                h_clipped = np.clip(h_t, 1e-9, 1 - 1e-9)
-                z_ttc = ndtri(h_clipped)
-                rho = self.asset_correlation
-                # Eq. 15 convention: macro_shock IS Z; Z < 0 = recession = higher PD
-                z_pit = (z_ttc - np.sqrt(rho) * macro_shock) / np.sqrt(1.0 - rho)
-                h_t = ndtr(z_pit)
-            h_t = np.clip(h_t, 0.0, 1.0)
+            h_t = self._apply_macro_shock(
+                self._model.predict_proba(X_scaled)[:, 1], macro_shock
+            )
 
             s_prev = survival[:, t - 2] if t > 1 else np.ones(n)
             survival[:, t - 1] = s_prev * (1.0 - h_t)
