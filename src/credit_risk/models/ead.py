@@ -72,25 +72,59 @@ def amortisation_factor(
 
 
 
-def compute_months_on_book_at_default(df: pd.DataFrame) -> pd.Series:
-    """Estimate months on book at default for defaulted loans.
+def estimate_months_on_book(
+    df: pd.DataFrame, reporting_date: str | pd.Timestamp | None = None
+) -> pd.Series:
+    """Estimate each loan's months on book, in descending order of preference.
 
-    Uses total payments made relative to term length as a proxy when exact
-    default date is unavailable.
+    The function serves two related but distinct notions, and the caller chooses which by
+    passing ``reporting_date`` or not:
+
+    1. ``reporting_date`` given → **age at the reporting date**, the correct basis for a
+       reporting-date exposure. Elapsed months from ``issue_d``, capped at the term.
+    2. No reporting date, ``total_pymnt`` present → **months on book at default**, inferred
+       from cumulative payments against the contractual instalment. Correct for survival
+       durations, and the only option for a defaulted-loan analysis.
+    3. Neither → a flat ``0.4 * term`` fallback. This carries no loan-level information
+       and its use is recorded by the caller so it cannot pass unnoticed.
+
+    Named ``compute_months_on_book_at_default`` until Flaws.md finding N10: the old name
+    described only case 2, while the EAD model called it for every loan in the portfolio.
 
     Parameters
     ----------
     df:
-        DataFrame with 'term' (months), 'total_pymnt' (optional), 'funded_amnt'.
+        DataFrame with 'term' (months); optionally 'issue_d', 'total_pymnt', 'funded_amnt'.
+    reporting_date:
+        Portfolio reporting date. When supplied and 'issue_d' is parseable, case 1 applies.
 
     Returns
     -------
     pd.Series
-        Estimated months on book at default.
+        Estimated months on book.
     """
     term = pd.to_numeric(
         df["term"].astype(str).str.extract(r"(\d+)")[0], errors="coerce"
     ).fillna(36.0)
+
+    # Preferred: elapsed time from origination to the reporting date, capped at the term.
+    #
+    # This is the right quantity for a reporting-date exposure in the first place, and
+    # unlike the payment-based proxy below it survives the leakage filter. The payment
+    # columns are on the config deny-list and are stripped from the modelling frame before
+    # the split, so in production the payment branch never ran and every loan silently
+    # took the `term * 0.4` fallback: EAD became a deterministic function of (term, rate)
+    # with no loan-level ageing at all, and a fully repaid 2010 loan still showed ~65%
+    # exposure at the 2018Q4 reporting date (Flaws.md finding N10).
+    if "issue_d" in df.columns and reporting_date is not None:
+        issued = pd.to_datetime(df["issue_d"], format="%b-%Y", errors="coerce")
+        elapsed = (pd.Timestamp(reporting_date) - issued).dt.days / 30.44
+        mob = elapsed.clip(lower=0.0)
+        mob = pd.Series(np.minimum(mob.to_numpy(dtype=float), term.to_numpy(dtype=float)),
+                        index=df.index)
+        # Loans with an unparseable issue date fall back to the payment/fixed proxy below.
+        if not mob.isna().any():
+            return mob.rename("months_on_book")
 
     # Proxy: if total_pymnt available, estimate months from payment fraction
     if "total_pymnt" in df.columns:
@@ -109,10 +143,29 @@ def compute_months_on_book_at_default(df: pd.DataFrame) -> pd.Series:
         ).clip(lower=1.0)
         mob = (total_paid / installment).clip(0.0, term)
     else:
-        # Fallback: assume default at 40% of term
+        # Fallback: a flat fraction of term. Carries no loan-level information; callers
+        # record when this branch is taken (Flaws.md finding N10).
         mob = term * 0.4
 
     return mob.rename("months_on_book")
+
+
+def months_on_book_basis(
+    df: pd.DataFrame, reporting_date: str | pd.Timestamp | None = None
+) -> str:
+    """Report which branch of ``estimate_months_on_book`` a frame will take."""
+    if "issue_d" in df.columns and reporting_date is not None:
+        issued = pd.to_datetime(df["issue_d"], format="%b-%Y", errors="coerce")
+        if not issued.isna().any():
+            return "elapsed_since_origination"
+    if "total_pymnt" in df.columns:
+        return "payments_observed"
+    return "fixed_fraction_of_term"
+
+
+# Backwards-compatible alias: survival analysis genuinely wants months-on-book at default
+# and calls this without a reporting date, which is case 2 above.
+compute_months_on_book_at_default = estimate_months_on_book
 
 
 class EADModel:
@@ -127,12 +180,20 @@ class EADModel:
         Minimum R² (on defaulted loans with observed MOB) to apply regression refinement.
     """
 
-    def __init__(self, min_r2_for_regression: float = 0.20) -> None:
+    def __init__(
+        self,
+        min_r2_for_regression: float = 0.20,
+        reporting_date: str | pd.Timestamp | None = None,
+    ) -> None:
         self.min_r2_for_regression = min_r2_for_regression
+        # Portfolio reporting date. Supplying it makes exposure a function of each loan's
+        # actual age, instead of a flat fraction of its term (Flaws.md finding N10).
+        self.reporting_date = reporting_date
         self._use_regression: bool = False
         self._regression: object | None = None
         self._feature_cols: list[str] = []
         self._mean_ead: float = 0.0
+        self._mob_basis: str = "unknown"
 
     def fit(self, df: pd.DataFrame) -> "EADModel":
         """Fit EAD model on a DataFrame (defaulted or full portfolio).
@@ -144,7 +205,16 @@ class EADModel:
         """
         from sklearn.linear_model import Ridge  # noqa: PLC0415
 
-        mob = compute_months_on_book_at_default(df)
+        self._mob_basis = months_on_book_basis(df, self.reporting_date)
+        if self._mob_basis == "fixed_fraction_of_term":
+            logger.warning(
+                "EAD months-on-book falls back to a flat 40%% of term: neither a "
+                "reporting date with parseable issue_d nor total_pymnt is available, so "
+                "exposure carries no loan-level ageing information."
+            )
+        else:
+            logger.info("EAD months-on-book basis: %s", self._mob_basis)
+        mob = estimate_months_on_book(df, self.reporting_date)
         term = pd.to_numeric(
             df["term"].astype(str).str.extract(r"(\d+)")[0], errors="coerce"
         ).fillna(36.0)
@@ -181,7 +251,7 @@ class EADModel:
 
     def predict(self, df: pd.DataFrame) -> pd.Series:
         """Predict EAD for each loan."""
-        mob = compute_months_on_book_at_default(df)
+        mob = estimate_months_on_book(df, self.reporting_date)
         term = pd.to_numeric(
             df["term"].astype(str).str.extract(r"(\d+)")[0], errors="coerce"
         ).fillna(36.0)
@@ -207,6 +277,11 @@ class EADModel:
     @property
     def mean_ead(self) -> float:
         return self._mean_ead
+
+    @property
+    def mob_basis(self) -> str:
+        """Which months-on-book branch this model uses — surfaced into metrics.json."""
+        return self._mob_basis
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

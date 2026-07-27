@@ -37,6 +37,8 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
+from credit_risk.risk.ifrs9_ecl import normalize_int_rate_to_fraction
+
 logger = logging.getLogger(__name__)
 
 _GRADE_MAP = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
@@ -94,7 +96,13 @@ class DiscreteHazardModel:
     def _build_features(self, df: pd.DataFrame, mob: np.ndarray) -> np.ndarray:
         """Build feature matrix for a batch of (loan, mob) pairs."""
         grade = self._grade_num(df).values
-        int_rate = pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
+        # int_rate arrives as a FRACTION (loader.py divides by 100). Filling missing
+        # values with the literal 12.0 therefore injected ~92x the column mean straight
+        # into StandardScaler; normalising first makes the fallback 0.12 as intended
+        # (Flaws.md finding N25).
+        int_rate = normalize_int_rate_to_fraction(
+            pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
+        )
         dti = pd.to_numeric(df.get("dti", 15.0), errors="coerce").fillna(15.0).values
         term = self._term_num(df).values
         return np.column_stack([
@@ -134,7 +142,13 @@ class DiscreteHazardModel:
         mob = np.concatenate([np.arange(1, t + 1) for t in T_all])
 
         grade = self._grade_num(df).values
-        int_rate = pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
+        # int_rate arrives as a FRACTION (loader.py divides by 100). Filling missing
+        # values with the literal 12.0 therefore injected ~92x the column mean straight
+        # into StandardScaler; normalising first makes the fallback 0.12 as intended
+        # (Flaws.md finding N25).
+        int_rate = normalize_int_rate_to_fraction(
+            pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
+        )
         dti = pd.to_numeric(df.get("dti", 15.0), errors="coerce").fillna(15.0).values
         term = self._term_num(df).values
 
@@ -214,14 +228,17 @@ class DiscreteHazardModel:
 
         # Pre-extract features to avoid pandas overhead in the loop
         grade = self._grade_num(df).values
-        int_rate = pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
+        # int_rate arrives as a FRACTION (loader.py divides by 100). Filling missing
+        # values with the literal 12.0 therefore injected ~92x the column mean straight
+        # into StandardScaler; normalising first makes the fallback 0.12 as intended
+        # (Flaws.md finding N25).
+        int_rate = normalize_int_rate_to_fraction(
+            pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
+        )
         dti = pd.to_numeric(df.get("dti", 15.0), errors="coerce").fillna(15.0).values
         term = self._term_num(df).values
 
-        survival = np.ones((n, T))
-        marginal_pd = np.zeros((n, T))
-
-        for t in range(1, T + 1):
+        def _raw_hazard(t: int) -> np.ndarray:
             X = np.column_stack([
                 np.full(n, t, dtype=float),
                 np.full(n, t ** 2, dtype=float),
@@ -230,10 +247,48 @@ class DiscreteHazardModel:
                 dti,
                 term,
             ])
-            X_scaled = self._scaler.transform(X)
-            h_t = self._apply_macro_shock(
-                self._model.predict_proba(X_scaled)[:, 1], macro_shock
+            return self._model.predict_proba(self._scaler.transform(X))[:, 1]
+
+        # ── Macro shock: calibrated annually, so applied annually ──────────────
+        #
+        # Z is derived by inverting Vasicek on an ANNUAL default rate
+        # (risk/ifrs9_ecl.py). Applying that same transform to each MONTHLY hazard
+        # compounded it twelve times over: at h ~= 0.005 and Z = -1.64 the monthly hazard
+        # rose 3.5x, lifting the cumulative lifetime PD far past the 2.15x ratio the
+        # scenario actually targets, and that over-shock fed straight into the
+        # probability-weighted ECL (Flaws.md finding N15).
+        #
+        # Instead the shock is applied to the 12-month cumulative default probability,
+        # and the implied uplift is redistributed across months as a proportional-hazards
+        # scaling: with S = prod(1 - h_t) over the first 12 months and H = -ln(S),
+        #     PD_12m_shocked = Phi((Phi^-1(1 - S) - sqrt(rho) Z) / sqrt(1 - rho))
+        #     alpha          = -ln(1 - PD_12m_shocked) / H
+        #     h'_t           = 1 - (1 - h_t)^alpha
+        # which reproduces the target 12-month PD exactly, since S^alpha = e^{-alpha H}.
+        alpha_scale = None
+        if macro_shock != 0.0:
+            horizon_12 = min(12, T)
+            log_surv_12 = np.zeros(n)
+            for t in range(1, horizon_12 + 1):
+                log_surv_12 += np.log(np.clip(1.0 - _raw_hazard(t), 1e-12, 1.0))
+            cum_hazard_12 = -log_surv_12
+            pd_12_base = np.clip(1.0 - np.exp(log_surv_12), 1e-9, 1 - 1e-9)
+            pd_12_shocked = np.clip(
+                self._apply_macro_shock(pd_12_base, macro_shock), 1e-9, 1 - 1e-9
             )
+            cum_hazard_shocked = -np.log(1.0 - pd_12_shocked)
+            alpha_scale = np.where(
+                cum_hazard_12 > 1e-12, cum_hazard_shocked / np.maximum(cum_hazard_12, 1e-12), 1.0
+            )
+
+        survival = np.ones((n, T))
+        marginal_pd = np.zeros((n, T))
+
+        for t in range(1, T + 1):
+            h_t = _raw_hazard(t)
+            if alpha_scale is not None:
+                h_t = 1.0 - np.power(np.clip(1.0 - h_t, 1e-12, 1.0), alpha_scale)
+            h_t = np.clip(h_t, 0.0, 1.0)
 
             s_prev = survival[:, t - 2] if t > 1 else np.ones(n)
             survival[:, t - 1] = s_prev * (1.0 - h_t)

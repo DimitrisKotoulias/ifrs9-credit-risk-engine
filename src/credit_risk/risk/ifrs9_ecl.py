@@ -312,8 +312,21 @@ def run_ifrs9_ecl(
         for s in cfg.scenarios:
             s.weight /= total_w
 
-    # Baseline term structure for staging
-    baseline_ts = hazard_model.predict_term_structure(df, macro_shock=0.0)
+    # Term structure used for staging.
+    #
+    # This used to be evaluated at macro_shock=0.0, which corresponds to NO priced
+    # scenario: the baseline scenario sits at a non-zero Z (the Vasicek conditional-PD
+    # function does not return the unconditional PD at Z=0, so the projection intercept is
+    # recentred). Loans were therefore sorted into Stage 1 / Stage 2 under macroeconomic
+    # conditions that appear nowhere else in the calculation (Flaws.md finding N16).
+    #
+    # Staging now runs under the baseline scenario itself, which is the central expectation
+    # the ECL is anchored to.
+    _staging_scenario = next(
+        (s for s in cfg.scenarios if s.name.lower() == "baseline"), None
+    )
+    staging_shock = float(_staging_scenario.macro_shock) if _staging_scenario else 0.0
+    baseline_ts = hazard_model.predict_term_structure(df, macro_shock=staging_shock)
     pd_lifetime = baseline_ts["pd_lifetime"]
     pd_12m = baseline_ts["pd_12m"]
 
@@ -359,10 +372,28 @@ def run_ifrs9_ecl(
         "total_ead": total_ead,
         "coverage_ratio": coverage,
         "stage_counts": stage_counts,
+        # Which macro conditions the staging decision was taken under (Flaws.md N16).
+        "staging_scenario": _staging_scenario.name if _staging_scenario else "none",
+        "staging_macro_shock": staging_shock,
         "ecl_by_stage": {
             "s1": float(out["ecl_s1"].sum()),
             "s2": float(out["ecl_s2"].sum()),
             "s3": float(out["ecl_s3"].sum()),
+        },
+        # Per-stage exposure and 12-month/lifetime PD, so the report can reconcile the
+        # one-year EL against the staged, discounted, scenario-weighted ECL
+        # (Flaws.md finding N28).
+        "ead_by_stage": {
+            f"s{s}": float(ead[stages == s].sum()) for s in (1, 2, 3)
+        },
+        "n_by_stage": {f"s{s}": int((stages == s).sum()) for s in (1, 2, 3)},
+        "mean_pd_12m_by_stage": {
+            f"s{s}": (float(pd_12m[stages == s].mean()) if (stages == s).any() else 0.0)
+            for s in (1, 2, 3)
+        },
+        "mean_pd_lifetime_by_stage": {
+            f"s{s}": (float(pd_lifetime[stages == s].mean()) if (stages == s).any() else 0.0)
+            for s in (1, 2, 3)
         },
     }
 
@@ -671,7 +702,17 @@ def fit_macro_model(
     # baseline to through-the-cycle conditions, so the baseline systematic factor sits
     # near-neutral (Z ~ 0) instead of being spuriously adverse (was Z ~ -1.54, which
     # inflated ECL coverage and Stage 2 share).
+    #
+    # DISCLOSURE (Flaws.md finding N17). This is a THROUGH-THE-CYCLE anchor, not a
+    # forward-looking one. IFRS 9 B5.5.42 requires unbiased forward-looking expectations
+    # AT THE REPORTING DATE; the sample mean here spans a training window dominated by the
+    # financial crisis, so the "baseline" carries materially worse conditions (e.g.
+    # unemployment ~7.6%) than actually prevailed at the 2018Q4 reporting date (~3.9%).
+    # The choice is deliberate — it is the standard basis for regulatory-style TTC
+    # provisioning and keeps the scenario set stable across reporting periods — but it is
+    # a departure from the accounting standard and is declared as such in Section 10.
     ref_macro = merged[macro_cols].mean()
+    latest_macro = merged[macro_cols].iloc[-1] if len(merged) else ref_macro
 
     # Through-the-cycle (unconditional) default rate — the baseline anchor.
     ttc_dr = float(np.clip(df_train["target"].mean(), 1e-4, 0.99))
@@ -750,6 +791,11 @@ def fit_macro_model(
             "upside": upside_macro,
             "downside": downside_macro,
         },
+        # Basis of the central scenario, and the reporting-date actuals it departs from,
+        # so the report can quantify the TTC-vs-forward-looking gap (Flaws.md N17).
+        "baseline_basis": "through_the_cycle_training_mean",
+        "baseline_macro_ttc": {c: float(ref_macro[c]) for c in macro_cols},
+        "macro_at_reporting_date": {c: float(latest_macro[c]) for c in macro_cols},
     }
     logger.info("Macro-implied Vasicek shocks: baseline=%.4f | upside=%.4f | downside=%.4f",
                 shocks["baseline"], shocks["upside"], shocks["downside"])

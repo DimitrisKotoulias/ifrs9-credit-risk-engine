@@ -82,10 +82,14 @@ def run_validation(
         "oot": oot_disc,
     }
 
-    # ROC + KS + gains figures — in-time test set (clearly labeled)
-    _savefig(plot_roc_curve(y_test, y_pred_test, label="Scorecard (test)"), "roc_curve_test", fig_dir)
-    _savefig(plot_ks_chart(y_test, y_pred_test), "ks_chart_test", fig_dir)
-    _savefig(plot_gains_chart(y_test, y_pred_test), "gains_chart", fig_dir)
+    # Gains chart — OOT, so it matches the OOT material it is presented alongside in the
+    # report. It used to be built on the in-time test partition and shown next to the OOT
+    # ROC overlay with no partition label (Flaws.md finding N42).
+    _savefig(plot_gains_chart(y_oot, y_pred_oot), "gains_chart", fig_dir)
+
+    # The test-partition ROC and KS figures are no longer produced: neither was referenced
+    # by the report, and the OOT overlay below already shows the test curve alongside the
+    # OOT one (Flaws.md finding N37).
 
     # ROC + KS figures — OOT set (Fix 1.5: Figure 5 must show OOT metrics)
     _savefig(plot_roc_curve(y_oot, y_pred_oot, label="Scorecard (OOT)"), "roc_curve_oot", fig_dir)
@@ -113,13 +117,45 @@ def run_validation(
     # for fitting). The previous gate tested the in-time partition, which cannot see the
     # 2016-2018 era drift at all -- see docs/AUDIT.md finding A1.
     if oot_order_key is None:
+        logger.warning(
+            "No OOT ordering key supplied: the recalibration gate will use a POSITIONAL "
+            "split, which is not an out-of-time test. Pass issue dates instead."
+        )
         oot_order_key = np.arange(len(y_oot))
+        split_basis = "positional"
+    else:
+        split_basis = "issue_date"
     fit_mask = chronological_oot_split(oot_order_key, fit_fraction=0.5)
+
+    # Record the actual date span of each slice. A chronological split must satisfy
+    # max(fit) <= min(eval); publishing the bounds makes that checkable rather than
+    # assumed, which is exactly what let a positional split masquerade as out-of-time
+    # (Flaws.md finding N3).
+    slice_bounds: dict = {}
+    if split_basis == "issue_date":
+        _keys = pd.Series(oot_order_key)
+        _fit_keys, _eval_keys = _keys[fit_mask].dropna(), _keys[~fit_mask].dropna()
+        if len(_fit_keys) and len(_eval_keys):
+            slice_bounds = {
+                "fit_slice_min_date": str(pd.Timestamp(_fit_keys.min()).date()),
+                "fit_slice_max_date": str(pd.Timestamp(_fit_keys.max()).date()),
+                "eval_slice_min_date": str(pd.Timestamp(_eval_keys.min()).date()),
+                "eval_slice_max_date": str(pd.Timestamp(_eval_keys.max()).date()),
+            }
+            if pd.Timestamp(_fit_keys.max()) > pd.Timestamp(_eval_keys.min()):
+                logger.warning(
+                    "Recalibration gate slices overlap in time (fit max %s > eval min %s); "
+                    "this is not a clean out-of-time split.",
+                    slice_bounds["fit_slice_max_date"], slice_bounds["eval_slice_min_date"],
+                )
+
     gate = select_oot_recalibrator(
         y_fit=y_oot[fit_mask],
         p_fit=y_pred_oot[fit_mask],
         y_eval=y_oot[~fit_mask],
         p_eval=y_pred_oot[~fit_mask],
+        split_basis=split_basis,
+        slice_bounds=slice_bounds,
     )
     calibrator = gate.pop("calibrator", None)
     metrics["calibration"]["recalibration_gate"] = gate

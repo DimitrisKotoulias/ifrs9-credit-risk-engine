@@ -1,6 +1,6 @@
 # IFRS 9 Credit-Risk & ECL Engine
 
-**PD scorecard · LGD/EAD · Basel IRB capital · 3-stage IFRS 9 ECL — on 1.37M Lending Club loans.**
+**PD scorecard · LGD/EAD · Basel IRB capital · 3-stage IFRS 9 ECL — on 2.26M Lending Club loans.**
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -14,7 +14,7 @@ engine on Lending Club data.
 
 ## Key Results
 
-Latest full real-data run (Lending Club 2007–2018, ~1.37M accepted loans; 993k with a resolved good/bad outcome form the modelling population). To
+Latest full real-data run (Lending Club 2007–2018, ~2.26M accepted loans; 1.37M with a resolved good/bad outcome; 993k in the modelling population after the 2015 grey-zone embargo). To
 regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 `python scripts/update_readme_metrics.py`) to rewrite the table below from
 `outputs/metrics.json`.
@@ -22,27 +22,27 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 <!-- METRICS:START -->
 | Metric | Value |
 |--------|-------|
-| PD AUC (OOT) | 0.699 |
-| Gini (OOT) | 0.398 |
-| KS (OOT) | 0.287 |
+| PD AUC (OOT) | 0.700 |
+| Gini (OOT) | 0.401 |
+| KS (OOT) | 0.289 |
 | PSI (train → OOT) | 0.003 |
 | Mean LGD (OOS-selected model) | 0.893 |
 | Downturn LGD (p90) | 1.000 |
-| Portfolio EL | $2.32bn |
-| Total RWA (IRB) | $21.59bn |
-| RWA density | 228.8% |
-| Total IFRS 9 ECL | $2.39bn |
-| ECL coverage | 25.3% |
+| Portfolio EL | $279.67m |
+| Total RWA (IRB) | $6.03bn |
+| RWA density | 161.8% |
+| Total IFRS 9 ECL | $1.18bn |
+| ECL coverage | 31.7% |
 | Stage 2 / Stage 3 share | 29.4% / 21.5% |
-| Operating cut-off | score 530 (61.4% approval, 13.8% bad rate, RAROC -63.1%) |
+| Operating cut-off | score 530 (64.4% approval, 14.2% bad rate, RAROC 58.8%) |
 <!-- METRICS:END -->
 
 > The recommended operating cutoff is the most inclusive score that keeps the
 > approved bad rate within the 15% risk-appetite ceiling — it is *not* the
-> profit-maximising cutoff. At correctly-annualised expected loss its RAROC is
-> negative, meaning the current risk-appetite ceiling is looser than the
-> profitable region of the grid; see the model-risk report's cutoff section
-> for the full 400–800 sweep.
+> profit-maximising cutoff. Whether it clears the RAROC hurdle is reported in the
+> model-risk report's cutoff section, alongside the full 400–800 sweep. Note the
+> distinction used throughout: the **cost of capital** (12%) is charged in the P&L,
+> while the **RAROC hurdle** (15%) is only the threshold the result is compared to.
 
 > Benchmark comparisons against published literature are computed at report-build time
 > (some metrics sit above/below published ranges by design — see the model-risk report,
@@ -56,7 +56,7 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 <tr>
 <td width="50%">
 
-**ROC — in-time vs out-of-time** (Gini 0.401 → 0.398)
+**ROC — in-time vs out-of-time** (Gini 0.404 → 0.401)
 <img src="reports/figures/validation/roc_oot_overlay.png" alt="ROC curve overlay in-time vs out-of-time">
 
 </td>
@@ -84,20 +84,20 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 <tr>
 <td width="50%">
 
-**Portfolio loss distribution** — VaR 99.9% $5.06bn, ES $5.40bn
+**Portfolio loss distribution** — VaR 99.9% $716.80m, ES $776.89m
 <img src="reports/figures/loss_distribution.png" alt="Portfolio loss distribution Monte Carlo ASRF Vasicek">
 
 </td>
 <td width="50%">
 
-**IFRS 9 ECL sensitivity to macro shocks** — ±2 Z-factor vs $2.97bn baseline
+**IFRS 9 ECL sensitivity to macro shocks** — ±2 Z-factor vs $1.18bn baseline
 <img src="reports/figures/ecl_tornado.png" alt="ECL portfolio sensitivity to macroeconomic shocks">
 
 </td>
 </tr>
 </table>
 
-More figures (calibration, PSI, PDP/ICE, cutoff/RAROC) live under `reports/figures/`
+More figures (calibration, PSI, vintage backtest, cutoff/RAROC) live under `reports/figures/`
 and `reports/figures/validation/`, and are embedded in the full `reports/model_risk_report.pdf`.
 
 ---
@@ -119,7 +119,7 @@ credit-risk-ecl/
 │   ├── risk/                   # EL, Basel IRB, IFRS 9 ECL
 │   ├── validation/             # discrimination, calibration, PSI, OOT
 │   ├── business/               # cutoff optimisation, reject inference
-│   ├── reporting/              # Jinja2 → PDF
+│   ├── reporting/              # charts & publication style (the LaTeX report lives in reports/)
 │   └── utils/                  # logging, config
 ├── reports/
 │   ├── figures/
@@ -189,8 +189,18 @@ All parameters live in `config/config.yaml`.  Key switches:
   deny-list in `config.yaml`. See `src/credit_risk/data/leakage.py`.
 - **OOT split:** train on vintages before 2015-01-01; OOT on vintages from 2016-01-01.
   No random-date splitting — this mirrors bank model-governance practice.
-- **Basel IRB formula:** retail "other retail" supervisory formula (BCBS §328).
-  No maturity adjustment for retail. PD floor 0.03%.
+- **PD horizon:** the scorecard's target is the loan's *terminal resolved status*, so its
+  direct output is a **lifetime** PD. Basel IRB, the per-annum P&L and the stress test all
+  require a **one-year** PD, so it is converted at the point of use via
+  `pd_12m = 1 - (1 - pd_lifetime)^(12/term)`. The lifetime figure is kept where its horizon
+  is the right one: IFRS 9 staging and lifetime ECL.
+- **Basel IRB formula:** retail "other retail" supervisory formula (BCBS §328) on the
+  12-month PD. No maturity adjustment for retail. PD floor 0.03%.
+- **EAD:** contractual amortisation at the configured `reporting_date`, so exposure falls
+  with each loan's actual age. Zero-prepayment assumption (conservative).
+- **Economic capital:** Monte Carlo ASRF on the *same* supervisory correlation curve as the
+  IRB figure it is compared against; a flat ρ=0.15 run is reported alongside as a
+  correlation sensitivity.
 - **IFRS 9 ECL:** 3-stage model with SICR (2.5× PD uplift + 30 DPD backstop), discrete
   hazard term structure, discounted at effective interest rate, probability-weighted across
   baseline / upside / downside macro scenarios.

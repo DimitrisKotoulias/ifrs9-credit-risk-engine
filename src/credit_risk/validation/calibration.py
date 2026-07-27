@@ -71,6 +71,12 @@ def hosmer_lemeshow_test(
     p_val = float(1.0 - _scipy_stats.chi2.cdf(h_stat, df=df)) if df > 0 else 0.0
     return {
         "h_stat": float(h_stat), "p_value": p_val, "df": df,
+        # The test subsamples above 5,000 rows, and the recalibration gate triggers off
+        # this p-value, so the sample it was actually computed on is reported rather than
+        # left implicit (Flaws.md finding N26).
+        "n_evaluated": int(len(y_t_eval)),
+        "n_supplied": int(len(y_true)),
+        "subsampled": bool(len(y_true) > len(y_t_eval)),
         "interpretation": "miscalibrated" if p_val < 0.05 else "calibrated",
     }
 
@@ -112,9 +118,12 @@ def compute_calibration(
     hl_pvalue = hl_res["p_value"]
 
     if hl_pvalue < 0.05:
+        # This function only measures calibration; it applies nothing. The decision to
+        # recalibrate belongs to select_oot_recalibrator(). The old wording claimed a
+        # transform was being applied here, which was never true (Flaws.md finding N26).
         logger.warning(
-            "[%s] Hosmer-Lemeshow p=%.4f < 0.05 => model is miscalibrated. "
-            "Applying isotonic calibration.",
+            "[%s] Hosmer-Lemeshow p=%.4f < 0.05 => miscalibrated on this sample. "
+            "Whether a recalibrator is fitted is decided by the out-of-time gate.",
             label, hl_pvalue,
         )
     else:
@@ -129,6 +138,8 @@ def compute_calibration(
         "brier_score": brier,
         "hl_statistic": hl_stat,
         "hl_pvalue": hl_pvalue,
+        "hl_n_evaluated": int(hl_res.get("n_evaluated", 0)),
+        "hl_subsampled": bool(hl_res.get("subsampled", False)),
         "n_bins": n_bins,
     }
 
@@ -244,6 +255,8 @@ def select_oot_recalibrator(
     hl_alpha: float = 0.05,
     ratio_tol: float = 0.10,
     seed: int = 42,
+    split_basis: str = "unknown",
+    slice_bounds: dict | None = None,
 ) -> dict:
     """Trigger, fit and accept a recalibrator using a chronological out-of-time split.
 
@@ -273,6 +286,11 @@ def select_oot_recalibrator(
 
     out: dict = {
         "gate": "out_of_time_chronological_split",
+        "split_basis": split_basis,
+        # Date bounds of the two slices, so a caller (or a QA guard) can verify that the
+        # split really is chronological instead of taking the name on trust
+        # (Flaws.md finding N3).
+        **(slice_bounds or {}),
         "n_fit": int(len(y_fit)),
         "n_eval": int(len(y_eval)),
         "calibrator": None,
@@ -332,15 +350,34 @@ def select_oot_recalibrator(
     brier_not_worse = after_brier <= before_brier + 1e-6
     accepted = bool(ratio_improves and brier_not_worse)
 
+    # AUC, expected/actual default rate and the HL p-value complete the before/after
+    # picture the report tabulates. They are recorded here, on the deployed transform and
+    # the held-out later slice, so the report no longer has to rebuild a throwaway
+    # calibrator on the wrong partition to populate that table (Flaws.md finding N6).
+    from sklearn.metrics import roc_auc_score  # noqa: PLC0415
+
+    def _eval_block(p_arr: np.ndarray, ratio: float, brier: float,
+                    intercept: float, slope: float) -> dict:
+        try:
+            auc = float(roc_auc_score(y_eval, p_arr))
+        except ValueError:
+            auc = float("nan")
+        return {
+            "ratio": float(ratio),
+            "brier": float(brier),
+            "intercept": float(intercept),
+            "slope": float(slope),
+            "auc": auc,
+            "expected_dr": float(np.mean(p_arr)),
+            "actual_dr": float(np.mean(y_eval)),
+            "hl_pvalue": float(compute_calibration(y_eval, p_arr, label="gate_eval")["hl_pvalue"]),
+        }
+
     out.update({
-        "eval_before": {
-            "ratio": float(before_ratio), "brier": before_brier,
-            "intercept": float(before_int), "slope": float(before_slope),
-        },
-        "eval_after": {
-            "ratio": float(after_ratio), "brier": after_brier,
-            "intercept": float(after_int), "slope": float(after_slope),
-        },
+        "eval_before": _eval_block(p_eval, before_ratio, before_brier, before_int, before_slope),
+        "eval_after": _eval_block(
+            p_eval_cal, after_ratio, after_brier, after_int, after_slope
+        ),
         "accepted": accepted,
         "accept_reason": (
             f"calibration ratio moved {before_ratio:.3f} -> {after_ratio:.3f} toward 1.0 "
@@ -369,6 +406,12 @@ def chronological_oot_split(
     """
     order = pd.Series(order_key)
     if order.isna().all():
+        # Positional fallback. This is NOT an out-of-time split: callers must not
+        # describe it as one (docs/AUDIT.md finding A22).
+        logger.warning(
+            "chronological_oot_split: ordering key is entirely missing; falling back to a "
+            "POSITIONAL split, which is not out-of-time."
+        )
         n_fit = int(len(order) * fit_fraction)
         mask = np.zeros(len(order), dtype=bool)
         mask[:n_fit] = True

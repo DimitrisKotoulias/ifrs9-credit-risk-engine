@@ -1,6 +1,12 @@
 # ── Reproducibility ───────────────────────────────────────────────────────────
 random_seed: 42
 
+# ── Portfolio reporting date ─────────────────────────────────────────────────
+# The as-of date for exposure, staging and provisioning. Loan age (and therefore the
+# amortised EAD) is measured against it, so this must match the data snapshot: the
+# LendingClub accepted-loan file ends at 2018Q4.
+reporting_date: "2018-12-31"
+
 # ── Data source ───────────────────────────────────────────────────────────────
 data:
   source: real               # real | synthetic

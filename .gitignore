@@ -76,5 +76,6 @@ kaggle.json
 mcp-servers/
 .agents/
 
-
-
+# Internal design/audit notes - not published
+docs/
+Flaws.md

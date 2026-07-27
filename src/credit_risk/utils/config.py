@@ -131,6 +131,9 @@ class PathsConfig(BaseModel):
 
 class Config(BaseModel):
     random_seed: int = 42
+    # Portfolio reporting date. Exposure at this date is what the EAD model measures, so
+    # loan age is computed against it rather than assumed (Flaws.md finding N10).
+    reporting_date: str = "2018-12-31"
     data: DataConfig
     target: TargetConfig
     leakage: LeakageConfig

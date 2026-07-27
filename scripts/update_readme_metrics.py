@@ -62,13 +62,19 @@ def _compact_count(value: object) -> str:
 
 
 def update_headline_counts(readme: str, metrics: dict) -> str:
-    """Rewrite the two loan-count claims that sit outside the metrics table.
+    """Rewrite the loan-count claims that sit outside the metrics table.
 
-    These were hard-coded at 2.26M while the pipeline actually loads a different number
-    (docs/AUDIT.md finding A5), so they are now regenerated from metrics.json like
-    everything else in the Key Results block.
+    Three distinct populations exist and the README used to conflate them: it labelled the
+    resolved-outcome count as "accepted" and the modelling population as "resolved", so
+    every figure was attached to the wrong name and the README contradicted the report's
+    own abstract (docs/AUDIT.md finding A5; Flaws.md finding N19).
+
+      accepted   = rows in the source file            (n_accepted_file)
+      resolved   = rows with a good/bad outcome       (n_resolved_outcome)
+      modelling  = train + test + OOT, net of the 2015 grey zone
     """
-    accepted = _compact_count(metrics.get("n_accepted_raw"))
+    accepted = _compact_count(metrics.get("n_accepted_file"))
+    resolved = _compact_count(metrics.get("n_resolved_outcome"))
     modelling = _compact_count(
         _num(metrics.get("n_train")) + _num(metrics.get("n_test")) + _num(metrics.get("n_oot"))
     )
@@ -80,11 +86,44 @@ def update_headline_counts(readme: str, metrics: dict) -> str:
     readme = re.sub(
         r"(Latest full real-data run \(Lending Club 2007\u20132018, )[^)]*\)",
         lambda m: (
-            f"{m.group(1)}~{accepted} accepted loans; {modelling} with a resolved "
-            "good/bad outcome form the modelling population)"
+            f"{m.group(1)}~{accepted} accepted loans; {resolved} with a resolved "
+            f"good/bad outcome; {modelling} in the modelling population after the 2015 "
+            "grey-zone embargo)"
         ),
         readme,
     )
+    return readme
+
+
+def update_figure_captions(readme: str, metrics: dict) -> str:
+    """Rewrite the numbers hand-typed into the Key Visualizations captions.
+
+    These sat outside the METRICS block and had drifted several runs behind the table
+    directly above them (Flaws.md finding N19).
+    """
+    gini_test = _num(metrics.get("gini"))
+    gini_oot = _num(metrics.get("gini_oot"))
+    if gini_test == gini_test and gini_oot == gini_oot:
+        readme = re.sub(
+            r"(\*\*ROC \u2014 in-time vs out-of-time\*\* \(Gini )[\d.]+ \u2192 [\d.]+\)",
+            lambda m: f"{m.group(1)}{gini_test:.3f} \u2192 {gini_oot:.3f})",
+            readme,
+        )
+
+    ec = metrics.get("econ_cap") or {}
+    if ec.get("var") is not None and ec.get("es") is not None:
+        readme = re.sub(
+            r"(\*\*Portfolio loss distribution\*\* \u2014 VaR 99\.9% )\$[\d.]+bn, ES \$[\d.]+bn",
+            lambda m: f"{m.group(1)}{_money(ec['var'])}, ES {_money(ec['es'])}",
+            readme,
+        )
+
+    if metrics.get("total_ecl") is not None:
+        readme = re.sub(
+            r"(\u00b12 Z-factor vs )\$[\d.]+bn( baseline)",
+            lambda m: f"{m.group(1)}{_money(metrics['total_ecl'])}{m.group(2)}",
+            readme,
+        )
     return readme
 
 
@@ -157,6 +196,7 @@ def main() -> int:
     _, post = rest.split(END_MARKER, 1)
     new_readme = f"{pre}{START_MARKER}\n{table}\n{END_MARKER}{post}"
     new_readme = update_headline_counts(new_readme, metrics)
+    new_readme = update_figure_captions(new_readme, metrics)
     README_PATH.write_text(new_readme, encoding="utf-8")
     print(f"README.md Key Results table regenerated from {METRICS_PATH}")
     return 0

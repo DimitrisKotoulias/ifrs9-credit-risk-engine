@@ -1,7 +1,12 @@
 """WoE/IV monotonic binning.
 
-Primary: optbinning.BinningProcess with monotonic trend enforcement.
-Fallback: manual MonotonicBinner using quantile + isotonic regression merge.
+Primary: ``optbinning.BinningProcess``, whose optimal-binning solver (mixed-integer
+programming) produces the bins; monotonicity comes from that solver's defaults.
+Fallback: ``ManualMonotonicBinner``, quantile splits plus adjacent-bin merging until the
+sign of the WoE differences is homogeneous.
+
+Neither path uses isotonic regression — earlier docstrings and report prose claimed it
+did (Flaws.md finding N30).
 """
 
 from __future__ import annotations
@@ -17,23 +22,42 @@ logger = logging.getLogger(__name__)
 
 
 def _try_optbinning() -> bool:
-    """Return True only if optbinning is importable."""
+    """Return True only if optbinning is importable.
+
+    Only ``ImportError`` is swallowed. The previous ``except (ImportError, Exception)``
+    caught everything, so an unrelated failure inside optbinning (e.g. the sklearn >=1.6
+    ``force_all_finite`` incompatibility) silently swapped in a completely different
+    binner — different bins, different WoE, different surviving feature set — and the
+    report would still build, with different numbers (Flaws.md finding N32).
+    """
     try:
-        from optbinning import BinningProcess  # noqa: PLC0415
+        from optbinning import BinningProcess  # noqa: F401,PLC0415
         return True
-    except (ImportError, Exception):
+    except ImportError:
         return False
 
 
+def binner_kind(binner: Any) -> str:
+    """Return a stable identifier for which binner implementation is in use."""
+    if isinstance(binner, OptBinningWrapper):
+        return "optbinning"
+    if isinstance(binner, ManualMonotonicBinner):
+        return "manual_fallback"
+    return type(binner).__name__
+
+
 class OptBinningWrapper(BaseEstimator, TransformerMixin):
-    """Wrapper over optbinning.BinningProcess for WoE-monotonic binning.
+    """Wrapper over ``optbinning.BinningProcess``.
+
+    Bins come from optbinning's optimal-binning solver at its default settings; this
+    wrapper does not impose a trend constraint of its own. (It used to advertise a
+    ``monotonic_trend`` parameter that was never forwarded to ``BinningProcess`` —
+    removed, Flaws.md findings N30/N45.)
 
     Parameters
     ----------
     variables:
         Names of features to bin. Remaining columns pass through.
-    monotonic_trend:
-        Trend constraint per variable; 'auto' lets optbinning decide.
     max_n_bins:
         Maximum number of bins per feature.
     min_bin_frac:
@@ -43,12 +67,10 @@ class OptBinningWrapper(BaseEstimator, TransformerMixin):
     def __init__(
         self,
         variables: list[str] | None = None,
-        monotonic_trend: str = "auto",
         max_n_bins: int = 10,
         min_bin_frac: float = 0.05,
     ) -> None:
         self.variables = variables
-        self.monotonic_trend = monotonic_trend
         self.max_n_bins = max_n_bins
         self.min_bin_frac = min_bin_frac
         self._process: Any = None
@@ -58,10 +80,6 @@ class OptBinningWrapper(BaseEstimator, TransformerMixin):
 
         variables = self.variables or list(X.select_dtypes(include="number").columns)
         self.variables_ = [v for v in variables if v in X.columns]
-
-        # Categorical variables use special handling
-        categorical = list(X.select_dtypes(exclude="number").columns)
-        categorical_vars = [c for c in categorical if c in (self.variables or [])]
 
         variable_dtypes = {}
         for v in self.variables_:
@@ -99,10 +117,11 @@ class OptBinningWrapper(BaseEstimator, TransformerMixin):
 
 
 class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
-    """Fallback monotonic binner using quantile splits + isotonic WoE merge.
+    """Fallback monotonic binner: quantile splits + adjacent-bin merging.
 
     Uses quantile-based initial binning then merges adjacent bins that violate
-    monotonicity in WoE until the trend is monotone.
+    monotonicity in WoE until the trend is monotone. This is a merge loop, not isotonic
+    regression (Flaws.md finding N30).
     """
 
     def __init__(
@@ -121,6 +140,9 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
         self.bin_edges_: dict[str, list[float]] = {}
         self.woe_maps_: dict[str, dict[int, float]] = {}
         self.iv_: dict[str, float] = {}
+        # Missing values are a bin in their own right, with their own WoE (Flaws.md N31).
+        self.missing_woe_: dict[str, float] = {}
+        self.missing_count_: dict[str, int] = {}
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "ManualMonotonicBinner":
         y_arr = np.asarray(y, dtype=float)
@@ -128,12 +150,33 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
         variables = self.variables or list(X.select_dtypes(include="number").columns)
         self.variables_ = [v for v in variables if v in X.columns]
 
+        n_bad_total = float(y_arr.sum())
+        n_good_total = float(len(y_arr)) - n_bad_total
+
         for col in self.variables_:
             x_arr = pd.to_numeric(X[col], errors="coerce").values
             edges, woe_map, iv = self._fit_one(x_arr, y_arr, n)
             self.bin_edges_[col] = edges
             self.woe_maps_[col] = woe_map
             self.iv_[col] = iv
+
+            # Missing values get their OWN WoE, estimated from the observed default rate
+            # among missing rows. Previously they were routed to bin 0 and silently took
+            # the lowest bin's WoE -- a different rule from the optbinning branch, so the
+            # two binners produced different models from the same data, and the direction
+            # of the implied risk was arbitrary per feature (Flaws.md finding N31).
+            miss = np.isnan(x_arr)
+            if miss.any():
+                mb = float(y_arr[miss].sum())
+                mg = float(miss.sum()) - mb
+                pct_g = (mg + self.laplace_alpha) / (n_good_total + 2 * self.laplace_alpha)
+                pct_b = (mb + self.laplace_alpha) / (n_bad_total + 2 * self.laplace_alpha)
+                self.missing_woe_[col] = float(np.log(pct_g / pct_b))
+                self.missing_count_[col] = int(miss.sum())
+            else:
+                # No missing values seen in training: neutral, and recorded as empty.
+                self.missing_woe_[col] = 0.0
+                self.missing_count_[col] = 0
 
         return self
 
@@ -204,8 +247,10 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
             valid = ~np.isnan(x_arr)
             bin_ids = np.zeros(len(x_arr), dtype=int)
             bin_ids[valid] = np.digitize(x_arr[valid], edges[1:-1], right=True)
-            # Missing bin: use bin 0 (first bin's WoE approximation)
-            out[col] = pd.Series(bin_ids).map(woe_map).fillna(0.0).values
+            woe_vals = pd.Series(bin_ids).map(woe_map).fillna(0.0).to_numpy(dtype=float)
+            # Missing rows take the missing bin's own WoE rather than bin 0's.
+            woe_vals[~valid] = self.missing_woe_.get(col, 0.0)
+            out[col] = woe_vals
         return out
 
     def get_iv_table(self) -> pd.DataFrame:

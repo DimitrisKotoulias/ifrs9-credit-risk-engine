@@ -109,7 +109,18 @@ class TestCalibration:
         y = (rng.random(500) > 0.7).astype(int)
         pred = np.clip(rng.random(500) * 0.5 + 0.1, 0, 1)
         result = compute_calibration(y, pred)
-        assert {"brier_score", "hl_statistic", "hl_pvalue", "n_bins"} == set(result.keys())
+        assert {
+            "brier_score",
+            "hl_statistic",
+            "hl_pvalue",
+            "hl_n_evaluated",
+            "hl_subsampled",
+            "n_bins",
+        } == set(result.keys())
+        # The HL test subsamples above 5,000 rows and the recalibration gate keys off its
+        # p-value, so the evaluated sample size is reported (Flaws.md finding N26).
+        assert result["hl_n_evaluated"] == 500
+        assert result["hl_subsampled"] is False
 
 
 class TestNewValidation:

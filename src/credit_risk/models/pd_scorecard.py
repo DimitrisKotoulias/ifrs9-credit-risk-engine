@@ -39,7 +39,16 @@ _EMP_LENGTH_ORDER = {
 
 
 def _add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Construct interaction features capturing compounding credit risk signals."""
+    """Construct interaction features capturing compounding credit risk signals.
+
+    Features the loader (``data/loader.py``) already engineered are left alone. This
+    function used to silently overwrite two of them: it rebuilt ``loan_to_income`` with
+    different NaN handling, and it wrote a ``revol_util * acc_open_past_24mths`` product
+    into the column named ``revol_util_x_open_acc`` --- which the loader had defined as
+    ``revol_util * open_acc``. The report then interpreted the resulting IV/SHAP row under
+    the wrong definition (Flaws.md finding N24). The interaction over recently opened
+    accounts now carries its own name, ``revol_util_x_new_acc``.
+    """
     out = df.copy()
 
     # Credit cycle stress: high DTI + low FICO → positive = high risk
@@ -48,13 +57,18 @@ def _add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
         fico_z = (df["fico_range_low"].fillna(df["fico_range_low"].median()) - df["fico_range_low"].median()) / (df["fico_range_low"].std() + 1e-9)
         out["dti_fico_interaction"] = dti_z * (-fico_z)
 
-    # Loan affordability ratio
-    if "loan_amnt" in df.columns and "annual_inc" in df.columns:
+    # Loan affordability ratio — only if the loader has not already produced it.
+    if (
+        "loan_to_income" not in out.columns
+        and "loan_amnt" in df.columns
+        and "annual_inc" in df.columns
+    ):
         out["loan_to_income"] = df["loan_amnt"].fillna(0) / (df["annual_inc"].clip(lower=1).fillna(50000))
 
-    # Revolving utilisation × open account count
+    # Revolving utilisation × accounts opened in the last 24 months. Distinct from the
+    # loader's revol_util_x_open_acc, which multiplies by total open accounts.
     if "revol_util" in df.columns and "acc_open_past_24mths" in df.columns:
-        out["revol_util_x_open_acc"] = (
+        out["revol_util_x_new_acc"] = (
             df["revol_util"].fillna(50) / 100.0 * df["acc_open_past_24mths"].fillna(3)
         )
     return out
@@ -142,6 +156,9 @@ class PDScorecard:
         self.max_iv = max_iv
         self.max_vif = max_vif
         self.exclude_features = exclude_features
+        # Minimum share of the training rows a feature must actually observe before it can
+        # be binned at all (Flaws.md finding N31, follow-on).
+        self.min_bin_frac_for_selection = 0.01
 
         # Computed during fit
         self._factor: float = 0.0
@@ -151,6 +168,14 @@ class PDScorecard:
         self._selected_features: list[str] = []
         self._scorecard_table: pd.DataFrame = pd.DataFrame()
         self._calibrator: Any = None
+        # Vintage scope of the calibrator — see set_calibrator (Flaws.md N5).
+        self._calibration_min_issue_year: int | None = None
+        # Feature counts surviving each selection stage, so the report can describe the
+        # real four-stage funnel instead of the two stages it used to claim
+        # (Flaws.md finding N29). Populated by fit().
+        self._selection_stages: dict[str, Any] = {}
+        self._n_dropped_sparse: int = 0
+        self._dropped_sparse: list[str] = []
 
     # ── Fitting ────────────────────────────────────────────────────────────────
 
@@ -167,9 +192,14 @@ class PDScorecard:
         1. Compute WoE/IV binning
         2. IV-band feature selection
         3. VIF filter
-        4. Logistic regression (statsmodels)
-        5. Sign check + re-bin violators
-        6. Scorecard scaling
+        4. ElasticNet (LogisticRegressionCV, SAGA) coefficient filter
+        5. Logistic regression (statsmodels)
+        6. Sign check, then refit on the survivors
+        7. Scorecard scaling
+
+        Stages 2-4 and 6 each drop features; the surviving counts are recorded in
+        ``self._selection_stages`` so the report can state the real funnel
+        (Flaws.md finding N29).
         """
         from credit_risk.features.selection import filter_by_iv, filter_by_vif, sign_check  # noqa: PLC0415
         from credit_risk.features.woe import WoETransformer  # noqa: PLC0415
@@ -183,11 +213,46 @@ class PDScorecard:
         candidate_cols = _select_pd_features(X_train)
         if self.exclude_features is not None:
             candidate_cols = [c for c in candidate_cols if c not in self.exclude_features]
+
+        # Drop features with too little observed data to bin at all.
+        #
+        # The LendingClub file carries columns that are entirely (or almost entirely)
+        # empty for this population -- the joint-application and hardship blocks, for
+        # instance. While missing values were being filled with the -9999 sentinel these
+        # arrived at the binner as a *constant* column and were quietly dropped later by
+        # the IV filter, contributing nothing. Passing genuine NaN (Flaws.md finding N31)
+        # instead leaves the binner with zero observations to fit, so they are excluded
+        # here, explicitly and with a count, rather than crashing the binner or being
+        # silently neutralised by a sentinel.
+        _min_obs = max(50, int(self.min_bin_frac_for_selection * len(X_train)))
+        _sparse = []
+        for col in candidate_cols:
+            series = pd.to_numeric(X_train[col], errors="coerce")
+            if series.notna().sum() < _min_obs or series.nunique(dropna=True) < 2:
+                _sparse.append(col)
+        if _sparse:
+            candidate_cols = [c for c in candidate_cols if c not in _sparse]
+            logger.info(
+                "PD model: %d candidate feature(s) dropped as unbinnable (fewer than %d "
+                "observed values, or constant): %s",
+                len(_sparse), _min_obs, _sparse,
+            )
+        self._n_dropped_sparse = len(_sparse)
+        self._dropped_sparse = list(_sparse)
+
         logger.info("PD model: %d candidate features", len(candidate_cols))
 
         # Step 1: WoE/IV
         woe_all = WoETransformer(variables=candidate_cols)
-        woe_all.fit(X_train[candidate_cols].fillna(-9999), y_train)
+        # Missing values are passed through as NaN so the binner can give them their
+        # own bin. They used to be filled with -9999 first, which dropped every missing
+        # observation into the lowest numeric bin of each feature. Two consequences: the
+        # binner's own "Missing" bin was structurally empty (N=0 in the points table, a
+        # code path that never fired), and the risk direction implied by the imputation
+        # was arbitrary per feature -- missing FICO landed in the WORST band while missing
+        # DTI landed in the BEST one, and for mths_since_recent_bc (missing = never held a
+        # bankcard) the assignment was actively the wrong sign (Flaws.md finding N31).
+        woe_all.fit(X_train[candidate_cols], y_train)
 
         # Step 2: IV filter
         iv_tbl = woe_all.get_iv_table()
@@ -200,12 +265,24 @@ class PDScorecard:
 
         # Re-fit WoE transformer on selected features only
         self._woe_transformer = WoETransformer(variables=iv_selected)
-        self._woe_transformer.fit(X_train[iv_selected].fillna(-9999), y_train)
-        X_woe = self._woe_transformer.transform(X_train[iv_selected].fillna(-9999))
+        self._woe_transformer.fit(X_train[iv_selected], y_train)
+        X_woe = self._woe_transformer.transform(X_train[iv_selected])
 
         # Step 3: VIF filter
         self._selected_features = filter_by_vif(X_woe, max_vif=self.max_vif, y=y_train)
         X_woe_sel = X_woe[self._selected_features]
+
+        self._selection_stages = {
+            "n_dropped_unbinnable": int(self._n_dropped_sparse),
+            "dropped_unbinnable": list(self._dropped_sparse),
+            "n_candidates": int(len(candidate_cols)),
+            "n_after_iv": int(len(iv_selected)),
+            "n_after_vif": int(len(self._selected_features)),
+            "iv_band": [float(self.min_iv), float(self.max_iv)],
+            "max_vif": float(self.max_vif),
+            "dropped_by_iv": sorted(set(candidate_cols) - set(iv_selected)),
+            "dropped_by_vif": sorted(set(iv_selected) - set(self._selected_features)),
+        }
 
         # Step 4: ElasticNet CV Feature Selection (SAGA)
         from sklearn.linear_model import LogisticRegressionCV  # noqa: PLC0415
@@ -228,15 +305,20 @@ class PDScorecard:
         non_zero_feats = [feat for feat, keep in zip(self._selected_features, coef_mask) if keep]
         logger.info("ElasticNet CV selected %d features: %s", len(non_zero_feats), non_zero_feats)
 
+        _pre_elasticnet = list(self._selected_features)
         if len(non_zero_feats) > 0:
             self._selected_features = non_zero_feats
             X_woe_sel = X_woe[self._selected_features]
+        self._selection_stages["n_after_elasticnet"] = int(len(self._selected_features))
+        self._selection_stages["dropped_by_elasticnet"] = sorted(
+            set(_pre_elasticnet) - set(self._selected_features)
+        )
 
         # Step 5: Final statsmodels logistic regression
         self._logit_result = self._fit_logistic(X_woe_sel, y_train)
         logger.info("Logistic regression fitted.\n%s", self._logit_result.summary2())
 
-        # Step 5: Sign check
+        # Step 6: Sign check
         # WoE = log(pct_good / pct_bad), so higher WoE = lower risk.
         # In logistic regression predicting P(bad=1), coefficients on WoE
         # features should be NEGATIVE (higher WoE → lower P(bad)).
@@ -260,7 +342,11 @@ class PDScorecard:
             X_woe_sel = X_woe[self._selected_features]
             self._logit_result = self._fit_logistic(X_woe_sel, y_train)
 
-        # Step 6: Scorecard scaling
+        self._selection_stages["n_after_sign_check"] = int(len(self._selected_features))
+        self._selection_stages["dropped_by_sign_check"] = sorted(violations)
+        self._selection_stages["final_features"] = list(self._selected_features)
+
+        # Step 7: Scorecard scaling
         self._factor = self.pdo / np.log(2)
         self._offset = self.base_score - self._factor * np.log(self.base_odds)
         self._build_scorecard_table()
@@ -407,11 +493,20 @@ class PDScorecard:
         woe_vars = self._woe_transformer.variables_
         # Keep only columns that exist in X (safety for inference on slim frames)
         available = [c for c in woe_vars if c in X.columns]
-        X_fill = X[available].reindex(columns=woe_vars, fill_value=-9999).fillna(-9999)
+        # NaN is preserved so scoring takes the same Missing bin the fit created.
+        X_fill = X[available].reindex(columns=woe_vars)
         return self._woe_transformer.transform(X_fill)[self._selected_features]
 
     def predict_score(self, X: pd.DataFrame) -> np.ndarray:
-        """Return credit score (higher = less risky)."""
+        """Return credit score (higher = less risky).
+
+        The score is the points-based scaling of the *raw* logit output and deliberately
+        does not pass through the recalibrator, so that it stays consistent with the
+        Appendix A points table. When a calibrator is attached, ``score_to_pd`` and
+        ``pd_to_score`` therefore describe the pre-recalibration mapping, not the PD that
+        ``predict_proba`` returns; the report states this explicitly
+        (Flaws.md finding N4, related item).
+        """
         X_woe = self._woe_transform(X)
         import statsmodels.api as sm  # noqa: PLC0415
 
@@ -430,7 +525,7 @@ class PDScorecard:
         raw_pd = self._logit_result.predict(X_sm).values
 
         if self._calibrator is not None:
-            raw_pd = self._calibrator.transform(raw_pd.reshape(-1, 1)).ravel()
+            raw_pd = self._apply_calibrator_in_scope(raw_pd, X)
 
         return raw_pd
 
@@ -445,9 +540,76 @@ class PDScorecard:
         odds = (1.0 - pd_arr) / (pd_arr + 1e-15)
         return self._factor * np.log(odds) + self._offset
 
-    def set_calibrator(self, calibrator: Any) -> None:
-        """Attach an isotonic/Platt calibrator fitted on the test set."""
+    def _apply_calibrator(self, raw_pd: np.ndarray) -> np.ndarray:
+        """Apply the attached calibrator, whichever family it belongs to.
+
+        Isotonic exposes ``.transform``; Platt scaling is a ``LogisticRegression`` and
+        exposes ``.predict_proba``. The previous code called ``.transform`` unconditionally,
+        so selecting Platt raised AttributeError and aborted the whole pipeline at the
+        portfolio scoring step (docs/AUDIT.md finding A23).
+        """
+        raw_pd = np.asarray(raw_pd, dtype=float)
+        if hasattr(self._calibrator, "predict_proba"):
+            out = self._calibrator.predict_proba(raw_pd.reshape(-1, 1))[:, 1]
+        elif hasattr(self._calibrator, "transform"):
+            out = np.asarray(self._calibrator.transform(raw_pd.reshape(-1, 1))).ravel()
+        else:
+            raise TypeError(
+                f"Calibrator {type(self._calibrator).__name__} exposes neither "
+                "predict_proba nor transform."
+            )
+        return np.clip(out, 1e-8, 1 - 1e-8)
+
+    def _apply_calibrator_in_scope(self, raw_pd: np.ndarray, X: pd.DataFrame) -> np.ndarray:
+        """Apply the calibrator only to the vintages it was fitted on.
+
+        The gate fits on the earlier half of the OOT window, so the transform it learns
+        describes the 2016+ era. Applying it across the whole 2007-2018 book left the
+        development vintages over-predicting their realised default rate by up to ~53%,
+        and that bias flowed straight into EL, RWA and every cutoff decision
+        (Flaws.md finding N5). Out-of-scope rows keep their raw PD.
+
+        With no scope set, or no usable issue date, behaviour is unchanged (global apply).
+        """
+        raw_pd = np.asarray(raw_pd, dtype=float)
+        if self._calibration_min_issue_year is None or "issue_d" not in X.columns:
+            return self._apply_calibrator(raw_pd)
+
+        year = pd.to_datetime(X["issue_d"], format="%b-%Y", errors="coerce").dt.year
+        in_scope = (year >= self._calibration_min_issue_year).to_numpy(dtype=bool)
+        if not in_scope.any():
+            return raw_pd
+
+        out = raw_pd.copy()
+        out[in_scope] = self._apply_calibrator(raw_pd[in_scope])
+        return out
+
+    def set_calibrator(
+        self, calibrator: Any, min_issue_year: int | None = None
+    ) -> None:
+        """Attach the isotonic/Platt recalibrator chosen by the out-of-time gate.
+
+        The gate fits on the earlier half of the OOT window and accepts only on measured
+        improvement in the later half (``validation.calibration.select_oot_recalibrator``)
+        — not on the test partition, as this docstring used to say.
+
+        Parameters
+        ----------
+        min_issue_year:
+            Restrict the transform to loans originated in or after this year, i.e. the era
+            the gate actually learned from. ``None`` applies it to every row.
+        """
         self._calibrator = calibrator
+        self._calibration_min_issue_year = min_issue_year
+
+    @property
+    def calibration_scope(self) -> str:
+        """Human-readable description of which vintages the calibrator touches."""
+        if self._calibrator is None:
+            return "none"
+        if self._calibration_min_issue_year is None:
+            return "all vintages"
+        return f"{self._calibration_min_issue_year}+ vintages only"
 
     @property
     def has_calibrator(self) -> bool:
@@ -468,6 +630,24 @@ class PDScorecard:
     @property
     def feature_names(self) -> list[str]:
         return list(self._selected_features)
+
+    @property
+    def selection_stages(self) -> dict[str, Any]:
+        """Feature counts (and names) dropped at each selection stage — see fit()."""
+        return dict(self._selection_stages)
+
+    @property
+    def binner_kind(self) -> str:
+        """Which binning implementation actually produced the WoE encoding.
+
+        Surfaced so a silent fallback to the manual binner cannot pass unnoticed into the
+        report (Flaws.md finding N32).
+        """
+        from credit_risk.features.binning import binner_kind as _kind  # noqa: PLC0415
+
+        if self._woe_transformer is None or self._woe_transformer._binner is None:
+            return "unfitted"
+        return _kind(self._woe_transformer._binner)
 
     @property
     def logit_summary(self) -> str:

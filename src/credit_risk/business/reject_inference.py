@@ -89,13 +89,26 @@ def refit_with_parcelling(
     pd_col: str = "pd_pred",
     target_col: str = "target",
     seed: int = 42,
-) -> tuple[object, float]:
+) -> tuple[object, float, dict]:
     """Refit logistic model on accepted+parcelled-rejected population.
+
+    The comparison is made **like-for-like**. Only features that genuinely vary across
+    the reject population are used, and both Gini figures are computed on the same
+    feature set with the same weighting.
+
+    Why this matters (Flaws.md finding N33): the reject file shares only about five
+    fields with the accepted file, and everything else was mean-imputed to a train
+    constant. Roughly two thirds of the model was therefore a constant across half the
+    fitting sample, and a constant predictor has zero discriminatory power. The reported
+    Gini drop was largely measuring that imputation, not latent risk in the
+    through-the-door population — yet the report interpreted it economically. Separately,
+    the accepted-only AUC was computed unweighted while the combined AUC was weighted, so
+    the two were not comparable even in principle.
 
     Returns
     -------
-    (fitted_model, gini_shift)
-        gini_shift = Gini(through-door) − Gini(accepted-only).
+    (fitted_model, gini_shift, diagnostics)
+        gini_shift = Gini(through-door) − Gini(accepted-only), both on the shared set.
     """
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
@@ -103,7 +116,27 @@ def refit_with_parcelling(
 
     combined = parcelling(df_accepted, df_rejected, pd_col=pd_col, target_col=target_col)
 
-    valid_cols = [c for c in feature_cols if c in combined.columns]
+    candidate_cols = [c for c in feature_cols if c in combined.columns]
+
+    # A feature that is constant across the rejects carries no information there: it was
+    # imputed, not observed. Keep only genuinely varying predictors.
+    genuine_cols, constant_cols = [], []
+    for col in candidate_cols:
+        series = pd.to_numeric(df_rejected[col], errors="coerce") if col in df_rejected.columns else None
+        if series is None or series.nunique(dropna=True) <= 1:
+            constant_cols.append(col)
+        else:
+            genuine_cols.append(col)
+
+    valid_cols = genuine_cols or candidate_cols
+    if constant_cols:
+        logger.warning(
+            "Reject inference: %d of %d scorecard features are constant across the reject "
+            "population (imputed, not observed) and are excluded so the comparison is "
+            "like-for-like: %s",
+            len(constant_cols), len(candidate_cols), constant_cols,
+        )
+
     X = combined[valid_cols].fillna(0.0).astype(float).values
     y = combined[target_col].fillna(0).astype(int).values
     w = combined["weight"].values
@@ -114,14 +147,15 @@ def refit_with_parcelling(
     model = LogisticRegression(C=0.5, max_iter=500, random_state=seed)
     model.fit(X_scaled, y, sample_weight=w)
 
-    # Gini on accepted only vs. through-the-door
+    # Gini on accepted only vs. through-the-door — same features, same weighting.
     X_acc = df_accepted[valid_cols].fillna(0.0).astype(float).values
     X_acc_sc = scaler.transform(X_acc)
     y_acc = df_accepted[target_col].fillna(0).astype(int).values
+    w_acc = np.ones(len(y_acc), dtype=float)
 
     if y_acc.sum() > 0:
         pd_acc = model.predict_proba(X_acc_sc)[:, 1]
-        auc_acc = float(roc_auc_score(y_acc, pd_acc))
+        auc_acc = float(roc_auc_score(y_acc, pd_acc, sample_weight=w_acc))
         gini_acc = 2 * auc_acc - 1
     else:
         gini_acc = 0.0
@@ -135,10 +169,21 @@ def refit_with_parcelling(
 
     gini_shift = gini_comb - gini_acc
     logger.info(
-        "Reject inference: Gini(accepted)=%.4f | Gini(through-door)=%.4f | shift=%.4f",
-        gini_acc, gini_comb, gini_shift,
+        "Reject inference: Gini(accepted)=%.4f | Gini(through-door)=%.4f | shift=%.4f "
+        "| features used=%d of %d",
+        gini_acc, gini_comb, gini_shift, len(valid_cols), len(candidate_cols),
     )
-    return model, gini_shift
+    diagnostics = {
+        "features_used": list(valid_cols),
+        "n_features_used": len(valid_cols),
+        "n_features_candidate": len(candidate_cols),
+        "features_imputed_constant": list(constant_cols),
+        "n_features_imputed_constant": len(constant_cols),
+        "gini_accepted_only": gini_acc,
+        "gini_through_the_door": gini_comb,
+        "weighting": "identical (unit weights on accepts, parcelling weights on rejects)",
+    }
+    return model, gini_shift, diagnostics
 
 
 def get_col_case_insensitive(df: pd.DataFrame, aliases: list[str]) -> pd.Series | None:

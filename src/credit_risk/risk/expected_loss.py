@@ -51,6 +51,7 @@ def portfolio_el_summary(
     el_col: str = "el",
     ead_col: str = "ead",
     pd_col: str = "pd_pred",
+    lgd_col: str = "lgd_pred",
 ) -> dict[str, object]:
     """Compute portfolio-level EL summary metrics.
 
@@ -63,13 +64,18 @@ def portfolio_el_summary(
     total_ead = float(df[ead_col].sum())
     el_rate = total_el / total_ead if total_ead > 0 else 0.0
 
-    return {
+    out = {
         "total_el": total_el,
         "total_ead": total_ead,
         "el_rate": el_rate,
         "mean_pd": float(df[pd_col].mean()),
         "n_loans": len(df),
     }
+    # The docstring has always promised mean_lgd; it was simply never returned
+    # (Flaws.md finding N26).
+    if lgd_col in df.columns:
+        out["mean_lgd"] = float(df[lgd_col].mean())
+    return out
 
 
 def el_by_segment(
@@ -124,7 +130,12 @@ def run_expected_loss(
     out = df.copy()
     out["el"] = compute_expected_loss(out, pd_col, lgd_col, ead_col)
 
-    summary = portfolio_el_summary(out)
+    # Pass the caller's column choices through: the summary reported the mean of
+    # "pd_pred" regardless of which PD column the EL was actually computed from.
+    summary = portfolio_el_summary(
+        out, ead_col=ead_col, pd_col=pd_col, lgd_col=lgd_col
+    )
+    summary["pd_col"] = pd_col
     logger.info("Portfolio EL summary: %s", summary)
 
     breakdowns = {}

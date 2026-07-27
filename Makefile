@@ -1,10 +1,18 @@
-.PHONY: setup data-download data pipeline report readme test lint clean
+.PHONY: setup setup-pinned data-download data pipeline report readme test lint clean
 
 PYTHON := python
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
+# `setup` resolves the ranges in pyproject.toml (which now carry upper bounds).
+# `setup-pinned` reproduces the exact versions the reported results were produced with;
+# previously requirements.txt was installed by no target at all (Flaws.md finding N22).
 setup:
 	$(PYTHON) -m pip install -e ".[dev]"
+	pre-commit install
+
+setup-pinned:
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install -e ".[dev]" --no-deps
 	pre-commit install
 	@echo "Setup complete. Place kaggle.json at %USERPROFILE%\\.kaggle\\kaggle.json before running make data-download."
 

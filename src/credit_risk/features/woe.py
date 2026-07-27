@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from credit_risk.features.binning import ManualMonotonicBinner, get_binner
+from credit_risk.features.binning import ManualMonotonicBinner, OptBinningWrapper, get_binner
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class WoETransformer(BaseEstimator, TransformerMixin):
         self.variables = variables
         self.max_n_bins = max_n_bins
         self.min_bin_frac = min_bin_frac
-        self._binner: ManualMonotonicBinner | None = None
+        self._binner: OptBinningWrapper | ManualMonotonicBinner | None = None
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "WoETransformer":
         self._binner = get_binner(
@@ -80,6 +80,10 @@ def compute_woe_iv(
     laplace_alpha: float = 0.5,
 ) -> tuple[pd.DataFrame, float]:
     """Compute WoE and IV for a single feature.
+
+    Standalone diagnostic helper for ad-hoc single-feature analysis. The fitted pipeline
+    does not use it — ``PDScorecard`` gets its IV table from ``WoETransformer``, which
+    delegates to the binner (Flaws.md finding N45).
 
     Parameters
     ----------

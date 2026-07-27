@@ -85,7 +85,7 @@ def simulate_portfolio_losses(
     lgd_arr: np.ndarray,
     ead_arr: np.ndarray,
     *,
-    rho: float = 0.15,
+    rho: float | str = 0.15,
     n_sim: int = 50_000,
     seed: int = 42,
     n_buckets: int = 50,
@@ -97,7 +97,8 @@ def simulate_portfolio_losses(
     pd_arr, lgd_arr, ead_arr:
         Per-obligor PD, LGD and EAD, each shape ``(n,)``.
     rho:
-        Asset correlation to the systematic factor (Basel retail default ~0.15).
+        Asset correlation to the systematic factor: a constant, or ``"supervisory"`` to
+        use the BCBS "Other Retail" curve per PD bucket (see the note in the body).
     n_sim:
         Number of Monte Carlo scenarios.
     seed:
@@ -116,8 +117,8 @@ def simulate_portfolio_losses(
         raise ValueError("pd_arr, lgd_arr and ead_arr must have equal length")
     if len(pd_arr) == 0:
         return np.zeros(n_sim, dtype=float)
-    if not 0.0 <= rho < 1.0:
-        raise ValueError(f"rho must be in [0, 1), got {rho}")
+    if not (isinstance(rho, str) or 0.0 <= rho < 1.0):
+        raise ValueError(f"rho must be in [0, 1) or 'supervisory', got {rho}")
 
     count, pd_b, lgd_b, ead_b = _aggregate_buckets(pd_arr, lgd_arr, ead_arr, n_buckets)
 
@@ -125,11 +126,29 @@ def simulate_portfolio_losses(
     z = rng.standard_normal(n_sim)  # systematic factor, one draw per scenario
 
     g_pd = ndtri(pd_b)  # (B,)
-    sqrt_rho = np.sqrt(rho)
-    sqrt_1mrho = np.sqrt(1.0 - rho)
+
+    # Correlation. Passing "supervisory" uses the same BCBS "Other Retail" curve the IRB
+    # capital calculation applies, evaluated per PD bucket. That matters because the
+    # economic-capital and regulatory-capital figures are presented side by side: with a
+    # flat rho=0.15 against a supervisory R that collapses to ~0.03 at this book's PDs,
+    # the headline EC/RegCap ratio was driven mostly by a 5x correlation difference, not
+    # by the tail fidelity the report attributed it to (Flaws.md finding N13).
+    if isinstance(rho, str):
+        if rho != "supervisory":
+            raise ValueError(f"unknown rho mode {rho!r}; expected a float or 'supervisory'")
+        from credit_risk.risk.basel_irb import irb_correlation  # noqa: PLC0415
+
+        rho_b = np.asarray(irb_correlation(pd_b), dtype=float)  # (B,)
+    else:
+        rho_b = np.full_like(pd_b, float(rho))
+
+    sqrt_rho = np.sqrt(rho_b)
+    sqrt_1mrho = np.sqrt(1.0 - rho_b)
 
     # Conditional PD per (scenario, bucket): negative Z => higher PD (adverse).
-    cond_pd = ndtr((g_pd[None, :] - sqrt_rho * z[:, None]) / sqrt_1mrho)  # (n_sim, B)
+    cond_pd = ndtr(
+        (g_pd[None, :] - sqrt_rho[None, :] * z[:, None]) / sqrt_1mrho[None, :]
+    )  # (n_sim, B)
 
     counts_int = count.astype(np.int64)
     defaults = rng.binomial(counts_int[None, :], cond_pd)  # (n_sim, B)
@@ -179,7 +198,7 @@ def run_economic_capital(
     pd_col: str = "pd_pred",
     lgd_col: str = "lgd_pred",
     ead_col: str = "ead",
-    rho: float = 0.15,
+    rho: float | str = 0.15,
     n_sim: int = 50_000,
     alpha: float = 0.999,
     seed: int = 42,
