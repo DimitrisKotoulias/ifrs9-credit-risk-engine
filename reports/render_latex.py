@@ -2523,12 +2523,12 @@ Z_{\text{shock}} = \frac{\Phi^{-1}(\text{TTC\_DR}) - \Phi^{-1}(\text{PIT\_DR}) \
 \end{equation}
 where $\text{TTC\_DR}$ is the long-run average (Through-the-Cycle) default rate, and $\text{PIT\_DR}$ is the Point-in-Time default rate predicted under each macroeconomic scenario.
 
-\textbf{The shock is applied at the horizon on which it was calibrated.} Both $\text{TTC\_DR}$ and $\text{PIT\_DR}$ above are \emph{annual} default rates, so $Z$ describes a one-year quantity. Applying that same Vasicek transform to each \emph{monthly} hazard would compound it twelve times over --- at a monthly hazard of $0.005$ and $Z = -1.64$ the hazard rises roughly $3.5\times$, lifting cumulative lifetime PD far past the ratio the scenario actually targets. Instead the shock is applied to the twelve-month cumulative default probability, and the resulting uplift is redistributed across months as a proportional-hazards scaling: with $S = \prod_{t \le 12}(1 - h_t)$,
+\textbf{The shock is applied once, at the horizon on which it was calibrated.} $\text{TTC\_DR}$ is the share of loans that default at any point in their life, so $Z$ describes a \emph{lifetime} quantity. Applying that same Vasicek transform to each \emph{monthly} hazard would compound it over the whole term, lifting cumulative PD far past the ratio the scenario actually targets. Instead the shock is applied once, to each loan's cumulative default probability over its own term, and the resulting uplift is redistributed across months as a proportional-hazards scaling: with $S = \prod_{t \le T}(1 - h_t)$ to the end of the term,
 \begin{equation}
 h'_t = 1 - (1 - h_t)^{\alpha}, \qquad
 \alpha = \frac{-\ln\!\big(1 - \Phi(\tfrac{\Phi^{-1}(1-S) - \sqrt{\rho} Z}{\sqrt{1-\rho}})\big)}{-\ln S},
 \end{equation}
-which reproduces the targeted twelve-month PD exactly, since $S^{\alpha} = e^{-\alpha \ln(1/S)}$.
+which reproduces the targeted lifetime PD exactly, since $S^{\alpha} = e^{-\alpha \ln(1/S)}$. The lifetime horizon is the only workable anchor here: the hazard model is fitted on a panel that places every default in the loan's final month (Section~10), so the twelve-month cumulative hazard is negligible and anchoring the scaling there would leave $\alpha \equiv 1$ and disable the macro overlay entirely.
 
 $\rho = 0.15$ here is the supervisory retail correlation used for the scenario mapping specifically; the Basel IRB capital calculation of Section~5.1 uses the PD-dependent ``Other Retail'' curve $R \in [0.03, 0.16]$, and the Monte Carlo economic capital of Section~5.4 uses that same curve.
 

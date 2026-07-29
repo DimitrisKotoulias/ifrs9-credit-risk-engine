@@ -954,6 +954,50 @@ def check_phase_failures_surfaced(tex_path: Path, metrics: dict, failures: list[
     )
 
 
+def check_ecl_sensitivity_responds(metrics: dict, failures: list[str]) -> None:
+    """The ECL macro-sensitivity grid must actually respond to the macro factor.
+
+    Found by eye, not by any guard: the tornado chart showed an identical ECL at every Z
+    from -2.0 to +2.0. The macro overlay had been silently disabled -- the Vasicek shock
+    was being anchored on the 12-month cumulative hazard, which is ~0 for every loan in a
+    model that places each default in the loan's final month, so the scaling factor
+    collapsed to 1. Every existing check passed throughout, because each number was
+    internally consistent; they were consistently the baseline.
+
+    Requires a material spread across the grid, and monotonicity in the documented
+    direction (Z < 0 is adverse, so ECL must fall as Z rises).
+    """
+    rows = metrics.get("ecl_sensitivity") or []
+    if len(rows) < 3:
+        return
+    pts = sorted(
+        ((float(r["macro_shock"]), float(r["total_ecl"])) for r in rows
+         if r.get("macro_shock") is not None and r.get("total_ecl") is not None),
+        key=lambda p: p[0],
+    )
+    if len(pts) < 3:
+        return
+    ecls = [e for _, e in pts]
+    lo, hi = min(ecls), max(ecls)
+    _check(
+        hi > 0 and (hi - lo) / hi > 0.01,
+        f"ECL macro sensitivity is flat across Z: every scenario returns "
+        f"{hi:,.0f} (spread {100 * (hi - lo) / max(hi, 1):.4f}%). The macro overlay is "
+        "not reaching the term structure",
+        failures,
+    )
+    adverse = [e for z, e in pts if z < 0]
+    benign = [e for z, e in pts if z > 0]
+    if adverse and benign:
+        _check(
+            min(adverse) > max(benign),
+            "ECL does not fall monotonically as Z rises: adverse scenarios (Z<0) must "
+            f"produce higher ECL than benign ones (min adverse {min(adverse):,.0f} vs "
+            f"max benign {max(benign):,.0f})",
+            failures,
+        )
+
+
 def check_page_count(failures: list[str], pdf_path: Path | None = None,
                      lo: int = 36, hi: int = 40) -> None:
     """Keep the PDF inside its agreed length envelope.
@@ -1008,6 +1052,7 @@ def run_metric_checks(metrics: dict) -> None:
     check_stress_direction(metrics, failures)
     check_vintage_calibration_band(metrics, failures)
     check_feature_selection_stages(metrics, failures)
+    check_ecl_sensitivity_responds(metrics, failures)
     if failures:
         raise QAError(
             "Report QA failed (%d issue(s)):\n  - %s"

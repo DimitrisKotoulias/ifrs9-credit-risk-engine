@@ -249,36 +249,52 @@ class DiscreteHazardModel:
             ])
             return self._model.predict_proba(self._scaler.transform(X))[:, 1]
 
-        # ── Macro shock: calibrated annually, so applied annually ──────────────
+        # ── Macro shock: applied once, at the horizon Z is calibrated on ───────
         #
-        # Z is derived by inverting Vasicek on an ANNUAL default rate
-        # (risk/ifrs9_ecl.py). Applying that same transform to each MONTHLY hazard
-        # compounded it twelve times over: at h ~= 0.005 and Z = -1.64 the monthly hazard
-        # rose 3.5x, lifting the cumulative lifetime PD far past the 2.15x ratio the
-        # scenario actually targets, and that over-shock fed straight into the
-        # probability-weighted ECL (Flaws.md finding N15).
+        # Z is derived by inverting Vasicek on a portfolio default rate
+        # (risk/ifrs9_ecl.py, `ttc_dr = mean(target)`). Because the target is the loan's
+        # terminal resolved status, that rate is a LIFETIME default rate. Applying the
+        # same transform to each MONTHLY hazard compounded it over the whole term, badly
+        # over-shocking the downside scenario and inflating the probability-weighted ECL
+        # (Flaws.md finding N15).
         #
-        # Instead the shock is applied to the 12-month cumulative default probability,
-        # and the implied uplift is redistributed across months as a proportional-hazards
-        # scaling: with S = prod(1 - h_t) over the first 12 months and H = -ln(S),
-        #     PD_12m_shocked = Phi((Phi^-1(1 - S) - sqrt(rho) Z) / sqrt(1 - rho))
-        #     alpha          = -ln(1 - PD_12m_shocked) / H
-        #     h'_t           = 1 - (1 - h_t)^alpha
-        # which reproduces the target 12-month PD exactly, since S^alpha = e^{-alpha H}.
+        # The shock is therefore applied ONCE, to each loan's cumulative default
+        # probability over its own term, and the resulting uplift is redistributed across
+        # months as a proportional-hazards scaling: with S = prod(1 - h_t) to the end of
+        # the term and H = -ln(S),
+        #     PD_shocked = Phi((Phi^-1(1 - S) - sqrt(rho) Z) / sqrt(1 - rho))
+        #     alpha      = -ln(1 - PD_shocked) / H
+        #     h'_t       = 1 - (1 - h_t)^alpha
+        # which reproduces the target lifetime PD exactly, since S^alpha = e^{-alpha H}.
+        #
+        # The anchor must be the lifetime horizon, not the first twelve months. This
+        # hazard model is fitted on a panel in which every default is placed in the loan's
+        # FINAL month (no observed default dates exist -- see Section 10), so the 12-month
+        # cumulative hazard is ~0 for every loan. Anchoring there made alpha identically 1
+        # and silently disabled the macro overlay altogether: every scenario returned the
+        # baseline ECL.
         alpha_scale = None
         if macro_shock != 0.0:
-            horizon_12 = min(12, T)
-            log_surv_12 = np.zeros(n)
-            for t in range(1, horizon_12 + 1):
-                log_surv_12 += np.log(np.clip(1.0 - _raw_hazard(t), 1e-12, 1.0))
-            cum_hazard_12 = -log_surv_12
-            pd_12_base = np.clip(1.0 - np.exp(log_surv_12), 1e-9, 1 - 1e-9)
-            pd_12_shocked = np.clip(
-                self._apply_macro_shock(pd_12_base, macro_shock), 1e-9, 1 - 1e-9
+            # Cumulative hazard to the end of each loan's own term.
+            term_idx = np.minimum(terms, T)
+            log_surv_life = np.zeros(n)
+            for t in range(1, T + 1):
+                active = term_idx >= t
+                if not active.any():
+                    break
+                log_surv_life += np.where(
+                    active, np.log(np.clip(1.0 - _raw_hazard(t), 1e-12, 1.0)), 0.0
+                )
+            cum_hazard_life = -log_surv_life
+            pd_life_base = np.clip(1.0 - np.exp(log_surv_life), 1e-9, 1 - 1e-9)
+            pd_life_shocked = np.clip(
+                self._apply_macro_shock(pd_life_base, macro_shock), 1e-9, 1 - 1e-9
             )
-            cum_hazard_shocked = -np.log(1.0 - pd_12_shocked)
+            cum_hazard_shocked = -np.log(1.0 - pd_life_shocked)
             alpha_scale = np.where(
-                cum_hazard_12 > 1e-12, cum_hazard_shocked / np.maximum(cum_hazard_12, 1e-12), 1.0
+                cum_hazard_life > 1e-12,
+                cum_hazard_shocked / np.maximum(cum_hazard_life, 1e-12),
+                1.0,
             )
 
         survival = np.ones((n, T))

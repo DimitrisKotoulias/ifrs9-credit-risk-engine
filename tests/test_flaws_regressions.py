@@ -453,12 +453,16 @@ def test_economic_capital_accepts_the_supervisory_correlation_curve():
 # ── N15: the macro shock is calibrated annually, so it must apply annually ─────
 
 
-def test_macro_shock_reproduces_its_target_twelve_month_pd():
-    """Applying the annual Vasicek transform per MONTH compounded it twelve times over.
+def test_macro_shock_reproduces_its_target_lifetime_pd():
+    """The Vasicek shock is applied once, at the horizon Z is calibrated on.
 
-    At h~0.005 and Z=-1.64 the monthly hazard rose ~3.5x, pushing cumulative lifetime PD
-    far past the ratio the scenario targets and over-shocking the downside ECL
-    (Flaws.md finding N15).
+    Applying it per MONTH compounded it over the whole term and over-shocked the downside
+    ECL (Flaws.md finding N15). The anchor must be the LIFETIME PD: `ttc_dr` is
+    `mean(target)`, and the target is terminal loan status, so the calibrated rate is a
+    lifetime rate. Anchoring on the first twelve months instead is degenerate here --
+    the model places every default in the loan's final month, so the 12-month cumulative
+    hazard is ~0 and the scaling factor collapses to 1, silently disabling the macro
+    overlay entirely.
     """
     from scipy.special import ndtr, ndtri
 
@@ -483,11 +487,21 @@ def test_macro_shock_reproduces_its_target_twelve_month_pd():
 
     rho = model.asset_correlation
     target = ndtr(
-        (ndtri(np.clip(base["pd_12m"], 1e-9, 1 - 1e-9)) - np.sqrt(rho) * z)
+        (ndtri(np.clip(base["pd_lifetime"], 1e-9, 1 - 1e-9)) - np.sqrt(rho) * z)
         / np.sqrt(1.0 - rho)
     )
-    np.testing.assert_allclose(shocked["pd_12m"], target, rtol=1e-6)
-    assert shocked["pd_12m"].mean() > base["pd_12m"].mean(), "Z<0 must raise PD"
+    np.testing.assert_allclose(shocked["pd_lifetime"], target, rtol=1e-6)
+    assert shocked["pd_lifetime"].mean() > base["pd_lifetime"].mean(), "Z<0 must raise PD"
+
+    # The overlay must actually bite: a flat response across Z means it is disabled.
+    up = model.predict_term_structure(df, macro_shock=+2.0)
+    down = model.predict_term_structure(df, macro_shock=-2.0)
+    assert down["pd_lifetime"].mean() > base["pd_lifetime"].mean() * 1.05
+    assert up["pd_lifetime"].mean() < base["pd_lifetime"].mean() * 0.95
+    assert down["marginal_pd"].sum() > up["marginal_pd"].sum(), (
+        "the ECL sensitivity grid is built from marginal_pd; if it does not move with Z, "
+        "every scenario collapses onto the baseline"
+    )
 
 
 # ── N33: reject inference must compare like with like ──────────────────────────

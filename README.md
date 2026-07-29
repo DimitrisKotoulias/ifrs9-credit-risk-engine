@@ -28,12 +28,12 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 | PSI (train → OOT) | 0.003 |
 | Mean LGD (OOS-selected model) | 0.893 |
 | Downturn LGD (p90) | 1.000 |
-| Portfolio EL | $279.67m |
+| Portfolio EL | $279.69m |
 | Total RWA (IRB) | $6.03bn |
 | RWA density | 161.8% |
-| Total IFRS 9 ECL | $1.18bn |
-| ECL coverage | 31.7% |
-| Stage 2 / Stage 3 share | 29.4% / 21.5% |
+| Total IFRS 9 ECL | $1.21bn |
+| ECL coverage | 32.4% |
+| Stage 2 / Stage 3 share | 29.7% / 21.5% |
 | Operating cut-off | score 530 (64.4% approval, 14.2% bad rate, RAROC 58.8%) |
 <!-- METRICS:END -->
 
@@ -90,7 +90,7 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 </td>
 <td width="50%">
 
-**IFRS 9 ECL sensitivity to macro shocks** — ±2 Z-factor vs $1.18bn baseline
+**IFRS 9 ECL sensitivity to macro shocks** — ±2 Z-factor vs $1.21bn baseline
 <img src="reports/figures/ecl_tornado.png" alt="ECL portfolio sensitivity to macroeconomic shocks">
 
 </td>
