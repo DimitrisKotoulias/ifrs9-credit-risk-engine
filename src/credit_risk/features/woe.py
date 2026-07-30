@@ -83,7 +83,7 @@ def compute_woe_iv(
 
     Standalone diagnostic helper for ad-hoc single-feature analysis. The fitted pipeline
     does not use it — ``PDScorecard`` gets its IV table from ``WoETransformer``, which
-    delegates to the binner (Flaws.md finding N45).
+    delegates to the binner (FLAWS-N45).
 
     Parameters
     ----------

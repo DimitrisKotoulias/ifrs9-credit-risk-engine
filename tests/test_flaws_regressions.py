@@ -1,4 +1,4 @@
-"""Regression tests for the defects recorded in Flaws.md (audit round 3).
+"""Regression tests for the defects recorded in the internal review log (audit round 3).
 
 Each test pins a behaviour that was previously wrong. Finding IDs (N1, N3, ...) refer to
 that document, which carries the evidence and impact for each.
@@ -42,7 +42,7 @@ def test_predict_proba_accepts_a_platt_calibrator():
     The gate picks between isotonic and Platt on out-of-fold Brier score, so which one is
     attached is data-dependent. predict_proba() called .transform() unconditionally, so
     any run where Platt won died with AttributeError at portfolio scoring time — a latent
-    crash, not a theoretical one (Flaws.md N4).
+    crash, not a theoretical one (the internal review log N4).
     """
     from sklearn.linear_model import LogisticRegression
 
@@ -88,7 +88,7 @@ def test_chronological_split_is_chronological_on_shuffled_input():
 
     The gate previously received np.arange() as its ordering key whenever the caller
     passed none, which made "out-of-time validation" a random 50/50 holdout of the same
-    period while the report described it as fitting on earlier vintages (Flaws.md N3).
+    period while the report described it as fitting on earlier vintages (the internal review log N3).
     """
     rng = np.random.default_rng(0)
     dates = pd.to_datetime(
@@ -130,7 +130,7 @@ def test_try_optbinning_does_not_swallow_arbitrary_errors(monkeypatch):
 
     `except (ImportError, Exception)` caught everything, so an unrelated failure inside
     optbinning silently produced a different model — different bins, different WoE,
-    different surviving features — and the report still built (Flaws.md N32).
+    different surviving features — and the report still built (the internal review log N32).
     """
     import builtins
 
@@ -167,7 +167,7 @@ def test_binner_kind_identifies_both_implementations():
 
 
 def test_optbinning_wrapper_has_no_dead_monotonic_trend_parameter():
-    """The parameter was advertised in the docstring and never forwarded (Flaws.md N30/N45)."""
+    """The parameter was advertised in the docstring and never forwarded (the internal review log N30/N45)."""
     assert not hasattr(OptBinningWrapper(), "monotonic_trend")
 
 
@@ -179,7 +179,7 @@ def test_interaction_features_do_not_overwrite_the_loader_definition():
 
     The scorecard used to overwrite that column with revol_util x acc_open_past_24mths,
     so the report's IV and SHAP rows were interpreted under the wrong definition
-    (Flaws.md N24).
+    (the internal review log N24).
     """
     df = pd.DataFrame({
         "revol_util": [50.0, 80.0],
@@ -210,7 +210,7 @@ def test_term_structure_features_normalise_int_rate_scale():
     """Filling missing int_rate with the literal 12.0 injected ~92x the column mean.
 
     loader.py stores int_rate as a fraction (~0.13). The hazard model filled NaNs with
-    12.0 and fed the result straight to StandardScaler (Flaws.md N25).
+    12.0 and fed the result straight to StandardScaler (the internal review log N25).
     """
     from credit_risk.models.pd_term_structure import DiscreteHazardModel
 
@@ -261,7 +261,7 @@ def test_selection_stages_are_recorded_and_monotone(small_accepted):
     split = int(n * 0.7)
 
     sc = PDScorecard(min_iv=0.001, max_iv=0.95, max_vif=50.0)
-    sc.fit(X.iloc[:split], y.iloc[:split], X.iloc[split:], y.iloc[split:])
+    sc.fit(X.iloc[:split], y.iloc[:split])
 
     stages = sc.selection_stages
     order = ["n_candidates", "n_after_iv", "n_after_vif", "n_after_elasticnet",
@@ -284,7 +284,7 @@ def test_lifetime_to_twelve_month_conversion_shrinks_pd():
     The scorecard target is terminal loan status, so its output is a LIFETIME default
     probability. It was fed straight into the Basel IRB one-year formula and into a
     per-annum P&L, producing a mean PD around 0.245 and an RWA density of 228.8%
-    (Flaws.md findings N1, N2).
+    (FLAWS-N1, N2).
     """
     pd_life = np.array([0.05, 0.245, 0.60])
     term = np.array([36.0, 36.0, 60.0])
@@ -297,7 +297,7 @@ def test_lifetime_to_twelve_month_conversion_shrinks_pd():
 
 
 def test_irb_capital_is_concave_so_a_lifetime_pd_can_invert_the_stress():
-    """Why the horizon error made stressed RWA FALL (Flaws.md finding N18).
+    """Why the horizon error made stressed RWA FALL (FLAWS-N18).
 
     The IRB capital function K(PD) rises, peaks and then declines, because the
     expected-loss term PD*LGD eventually outruns the conditional-loss term. Evaluated at a
@@ -327,7 +327,7 @@ def test_raroc_and_economic_profit_are_distinct():
 
     Subtracting the cost of capital inside RAROC and then comparing the result to the
     hurdle double-counts it, depressing every reported RAROC by exactly the
-    cost-of-capital rate (Flaws.md finding N12).
+    cost-of-capital rate (FLAWS-N12).
     """
     revenue, costs, el = 500.0, 120.0, 90.0
     capital, coc = 800.0, 0.12
@@ -352,7 +352,7 @@ def test_ead_distinguishes_loans_of_different_age():
 
     With months-on-book pinned at 40% of term for every loan, EAD was a deterministic
     function of (term, rate) alone: a fully-repaid 2010 loan still showed ~65% exposure at
-    the 2018Q4 reporting date (Flaws.md finding N10).
+    the 2018Q4 reporting date (FLAWS-N10).
     """
     from credit_risk.models.ead import EADModel
 
@@ -388,7 +388,7 @@ def test_calibrator_scope_leaves_earlier_vintages_untouched():
     """The gate learns a 2016+ transform; applying it to 2007-2014 biased those vintages.
 
     Development-era vintages ended up over-predicting their realised default rate by up to
-    ~53%, and that bias fed EL, RWA and every cutoff decision (Flaws.md finding N5).
+    ~53%, and that bias fed EL, RWA and every cutoff decision (FLAWS-N5).
     """
     from sklearn.isotonic import IsotonicRegression
 
@@ -426,7 +426,7 @@ def test_economic_capital_accepts_the_supervisory_correlation_curve():
     """EC and regulatory capital are compared side by side, so rho must be comparable.
 
     A flat rho=0.15 against a supervisory R collapsing to ~0.03 made the EC/RegCap ratio
-    mostly a correlation artefact (Flaws.md finding N13).
+    mostly a correlation artefact (FLAWS-N13).
     """
     from credit_risk.risk.economic_capital import simulate_portfolio_losses
 
@@ -457,7 +457,7 @@ def test_macro_shock_reproduces_its_target_lifetime_pd():
     """The Vasicek shock is applied once, at the horizon Z is calibrated on.
 
     Applying it per MONTH compounded it over the whole term and over-shocked the downside
-    ECL (Flaws.md finding N15). The anchor must be the LIFETIME PD: `ttc_dr` is
+    ECL (FLAWS-N15). The anchor must be the LIFETIME PD: `ttc_dr` is
     `mean(target)`, and the target is terminal loan status, so the calibrated rate is a
     lifetime rate. Anchoring on the first twelve months instead is degenerate here --
     the model places every default in the loan's final month, so the 12-month cumulative
@@ -513,7 +513,7 @@ def test_reject_inference_excludes_constant_imputed_features():
     Roughly two thirds of the scorecard was mean-imputed to a training constant for the
     entire reject population. A constant predictor has no discriminatory power, so the
     reported Gini drop measured that imputation rather than latent through-the-door risk
-    (Flaws.md finding N33).
+    (FLAWS-N33).
     """
     from credit_risk.business.reject_inference import refit_with_parcelling
 
@@ -555,7 +555,7 @@ def test_manual_binner_gives_missing_its_own_woe():
     extreme low bin of each feature. The binner's own Missing bin was therefore
     structurally empty, and the risk direction implied by the sentinel was arbitrary per
     feature: missing FICO landed in the worst band, missing DTI in the best
-    (Flaws.md finding N31).
+    (FLAWS-N31).
     """
     rng = np.random.default_rng(7)
     n = 600

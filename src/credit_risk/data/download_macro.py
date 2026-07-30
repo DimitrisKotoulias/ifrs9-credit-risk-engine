@@ -19,9 +19,16 @@ FRED_API_BASE_URL = "https://api.stlouisfed.org/fred"
 # CSUSHPISA (Case-Shiller US National Home Price Index, seasonally adjusted)
 # is used rather than the NSA variant so its QoQ growth rate is directly
 # comparable to the already-seasonally-adjusted UNRATE/CPIAUCSL series.
+#
+# GDPC1 (real GDP, chained 2017 dollars), not GDP (nominal). The live path used to pull
+# nominal GDP and take its QoQ change, which is real growth PLUS the deflator -- roughly
+# 0.7pp per quarter higher than the offline table's values, which are real-GDP-consistent.
+# Two consequences: the same column name carried a different quantity depending on which
+# path ran, and in the macro regression nominal growth alongside CPI_inflation entered
+# inflation twice.
 _FRED_SERIES = {
     "UNRATE": "UNRATE",
-    "GDP": "GDP",
+    "GDPC1": "GDP",
     "CPIAUCSL": "CPIAUCSL",
     "FEDFUNDS": "FEDFUNDS",
     "CSUSHPISA": "HPI",
@@ -119,6 +126,20 @@ _REAL_HISTORY = {
 }
 
 
+def _write_source_marker(output_path: Path, source: str) -> None:
+    """Record whether the macro CSV came from the live API or the offline table."""
+    marker = output_path.with_suffix(".source.txt")
+    marker.write_text(source, encoding="utf-8")
+
+
+def macro_source(macro_path: Path | str) -> str:
+    """``live`` / ``offline`` / ``unknown`` for a macro CSV written by this module."""
+    marker = Path(macro_path).with_suffix(".source.txt")
+    if marker.exists():
+        return marker.read_text(encoding="utf-8").strip() or "unknown"
+    return "unknown"
+
+
 def _fetch_fred_series(series_id: str, api_key: str, start: str, end: str) -> pd.Series:
     """Fetch one series from the official FRED REST API as a date-indexed Series."""
     import requests  # noqa: PLC0415
@@ -186,18 +207,29 @@ def download_or_generate_macro(
             ["quarter", "UNRATE", "GDP_growth", "CPI_inflation", "FEDFUNDS", "HPI_growth"]
         ]
         df.to_csv(output_path, index=False)
+        _write_source_marker(output_path, "live")
         logger.info(
             "Downloaded %d quarters of live FRED macro data to %s", len(df), output_path
         )
         return df
 
-    except Exception as exc:
+    except (OSError, RuntimeError, KeyError, ValueError) as exc:
+        # Narrow: network/HTTP failures (requests raises OSError subclasses), a missing API
+        # key, and malformed payloads. A bare `except Exception` here meant any bug in the
+        # transformation above also silently produced the offline table -- while the report
+        # states the data is "sourced live from the official FRED API". The two paths are
+        # not interchangeable, so which one ran is now recorded next to the CSV and the
+        # report reads it from there.
         logger.warning(
-            "Failed to download from FRED (%s). Falling back to offline real historical macro dataset.",
+            "Failed to download from FRED (%s). Falling back to the OFFLINE historical "
+            "macro table. This is not the same data as the live path: elasticities, the "
+            "ADF/Granger/Johansen diagnostics and per-scenario ECL will not reproduce the "
+            "published figures.",
             exc,
         )
         df = pd.DataFrame(_REAL_HISTORY)
         df.to_csv(output_path, index=False)
+        _write_source_marker(output_path, "offline")
         logger.info("Saved offline historical macro dataset to %s", output_path)
         return df
 

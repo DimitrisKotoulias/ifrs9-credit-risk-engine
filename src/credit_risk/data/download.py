@@ -14,7 +14,6 @@ Download your Kaggle API token from:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 from credit_risk.utils.config import load_config

@@ -29,7 +29,7 @@ def _resolve_features(
     columns (e.g. ``grade_enc``, ``term_enc``) are produced inside ``PDScorecard.fit`` and
     are missing from the raw training frame, so the challengers trained on a strictly
     smaller feature set than the champion while the report claimed parity
-    (docs/AUDIT.md findings A12 / B2). Callers must engineer those columns first.
+    (AUDIT-A12 / B2). Callers must engineer those columns first.
     """
     if feature_names is None:
         feature_names = list(X_train.select_dtypes(include="number").columns)
@@ -287,8 +287,15 @@ class PDMultiModelBenchmark:
         self.lgb_train_time = time.perf_counter() - t0
 
         # 2. Fit XGBoost
+        #
+        # Native NaN, exactly like LightGBM above. It used to be handed `fillna(-9999)`,
+        # which is a different missing-value policy from the other two models in a table
+        # the report presents as a like-for-like benchmark — and it is the same sentinel
+        # pattern the WoE binner was explicitly fixed to stop using, because it drops every
+        # missing observation into the lowest numeric band of each feature. XGBoost learns a
+        # default split direction for missing values on its own.
         t0 = time.perf_counter()
-        X_tr_xgb = X_tr.fillna(-9999)
+        X_tr_xgb = X_tr
         self._xgb_model = xgb.XGBClassifier(
             n_estimators=self.n_estimators,
             max_depth=6,
@@ -301,6 +308,10 @@ class PDMultiModelBenchmark:
         self.xgb_train_time = time.perf_counter() - t0
 
         # 3. Fit Random Forest
+        #
+        # The only model here that cannot take NaN at all, so it gets train-median
+        # imputation. That asymmetry is intrinsic to the estimator rather than a choice,
+        # and the benchmark table footnote says so.
         t0 = time.perf_counter()
         self._medians = X_tr.median()
         X_tr_rf = X_tr.fillna(self._medians)
@@ -334,7 +345,8 @@ class PDMultiModelBenchmark:
         """Predict probabilities using XGBoost."""
         if self._xgb_model is None:
             raise RuntimeError("Call fit() first.")
-        X_sub = X[self._feature_names].astype(float).fillna(-9999)
+        # Native NaN at serve time too — the fit no longer uses the -9999 sentinel.
+        X_sub = X[self._feature_names].astype(float)
         return self._xgb_model.predict_proba(X_sub)[:, 1]
 
     def predict_proba_rf(self, X: pd.DataFrame) -> np.ndarray:

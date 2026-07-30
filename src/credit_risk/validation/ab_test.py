@@ -73,7 +73,7 @@ def paired_bootstrap_gini(
 
     if not diffs:
         nan3 = {"median": float("nan"), "lo": float("nan"), "hi": float("nan")}
-        return {"gini_a": nan3, "gini_b": dict(nan3), "diff": dict(nan3),
+        return {"gini_a": dict(nan3), "gini_b": dict(nan3), "diff": dict(nan3),
                 "significant": False, "ci": ci, "n_boot_valid": 0}
 
     def _pct(vals: list[float]) -> dict[str, float]:

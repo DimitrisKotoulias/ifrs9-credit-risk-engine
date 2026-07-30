@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 from sklearn.metrics import roc_auc_score
 
 
@@ -115,12 +114,17 @@ class TestCalibration:
             "hl_pvalue",
             "hl_n_evaluated",
             "hl_subsampled",
+            "hl_n_replicates",
+            "hl_pvalue_min",
+            "hl_pvalue_max",
             "n_bins",
         } == set(result.keys())
         # The HL test subsamples above 5,000 rows and the recalibration gate keys off its
-        # p-value, so the evaluated sample size is reported (Flaws.md finding N26).
+        # p-value, so the evaluated sample size is reported (FLAWS-N26) along
+        # with the spread across replicate draws (AUDIT_FINDINGS ST3).
         assert result["hl_n_evaluated"] == 500
         assert result["hl_subsampled"] is False
+        assert result["hl_n_replicates"] == 1
 
 
 class TestNewValidation:
@@ -266,11 +270,9 @@ def test_benchmark_convergence() -> None:
 
         split, _ = load_and_prepare(cfg)
         df_train = split.train
-        df_test = split.test
         df_oot = split.oot
 
         y_train = df_train["target"]
-        y_test = df_test["target"]
         y_oot = df_oot["target"]
 
         scorecard = PDScorecard(
@@ -278,7 +280,7 @@ def test_benchmark_convergence() -> None:
             base_score=cfg.scorecard.base_score,
             base_odds=cfg.scorecard.base_odds,
         )
-        scorecard.fit(df_train, y_train, df_test, y_test)
+        scorecard.fit(df_train, y_train)
 
         pd_train = scorecard.predict_proba(df_train)
         pd_oot = scorecard.predict_proba(df_oot)

@@ -6,10 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credit_risk.data.target import TARGET_COL, define_target
 from credit_risk.features.woe import compute_woe_iv
 from credit_risk.features.selection import filter_by_iv, sign_check
-from credit_risk.utils.config import TargetConfig
 
 
 @pytest.fixture

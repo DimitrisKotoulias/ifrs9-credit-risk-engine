@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats as _scipy_stats
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss
 
@@ -22,10 +21,16 @@ from credit_risk.reporting.style import (
 _PALETTE = C_NAVY  # kept for backward compat
 
 
+_HL_SUBSAMPLE = 5_000
+_HL_REPLICATES = 9
+
+
 def hosmer_lemeshow_test(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     g: int = 10,
+    n_replicates: int = _HL_REPLICATES,
+    seed: int = 42,
 ) -> dict:
     """Hosmer-Lemeshow goodness-of-fit test (decile-based).
 
@@ -34,14 +39,44 @@ def hosmer_lemeshow_test(
     are highly duplicate). Groups with e_g == 0 but o_g > 0 are penalised
     with a large additive term (10^6) to flag extreme miscalibration.
 
+    Above 5,000 rows the test is evaluated on a subsample, because HL is a chi-squared
+    statistic that grows with n and rejects on any trivial departure at 250k+ rows. That
+    subsample is unavoidable, but resting a production decision on a *single* draw of it is
+    not: the recalibration gate triggers off this p-value, so the result used to hang on
+    one fixed-seed sample of 5,000 out of 277,705. The statistic is now averaged over
+    ``n_replicates`` independent draws and the spread is reported alongside.
+
     References
     ----------
     Hosmer, D.W. & Lemeshow, S. (1980). A Goodness-of-Fit Test for the
         Multiple Logistic Regression Model. *Communications in Statistics*.
     """
-    if len(y_true) > 5000:
-        rng = np.random.default_rng(seed=42)
-        idx = rng.choice(len(y_true), size=5000, replace=False)
+    if len(y_true) > _HL_SUBSAMPLE and n_replicates > 1:
+        singles = [
+            hosmer_lemeshow_test(y_true, y_pred, g=g, n_replicates=1, seed=seed + rep)
+            for rep in range(n_replicates)
+        ]
+        p_arr = np.asarray([s["p_value"] for s in singles], dtype=float)
+        h_arr = np.asarray([s["h_stat"] for s in singles], dtype=float)
+        p_val = float(np.median(p_arr))
+        return {
+            "h_stat": float(np.median(h_arr)),
+            "p_value": p_val,
+            "df": int(singles[0]["df"]),
+            "n_evaluated": int(_HL_SUBSAMPLE),
+            "n_supplied": int(len(y_true)),
+            "subsampled": True,
+            "n_replicates": int(n_replicates),
+            "p_value_min": float(p_arr.min()),
+            "p_value_max": float(p_arr.max()),
+            "interpretation": "miscalibrated" if p_val < 0.05 else "calibrated",
+        }
+
+    if len(y_true) > _HL_SUBSAMPLE:
+        # Single draw, explicitly seeded: the replicate loop above varies the seed, so the
+        # run stays reproducible while the reported p-value no longer rests on one sample.
+        rng = np.random.default_rng(seed=seed)
+        idx = rng.choice(len(y_true), size=_HL_SUBSAMPLE, replace=False)
         y_t_eval = y_true[idx]
         y_p_eval = y_pred[idx]
     else:
@@ -73,7 +108,7 @@ def hosmer_lemeshow_test(
         "h_stat": float(h_stat), "p_value": p_val, "df": df,
         # The test subsamples above 5,000 rows, and the recalibration gate triggers off
         # this p-value, so the sample it was actually computed on is reported rather than
-        # left implicit (Flaws.md finding N26).
+        # left implicit (FLAWS-N26).
         "n_evaluated": int(len(y_t_eval)),
         "n_supplied": int(len(y_true)),
         "subsampled": bool(len(y_true) > len(y_t_eval)),
@@ -105,7 +140,6 @@ def compute_calibration(
     dict[str, float]
         Keys: brier_score, hl_statistic, hl_pvalue, n_bins.
     """
-    from scipy import stats  # noqa: PLC0415
 
     y_t = np.asarray(y_true, dtype=float)
     y_p = np.clip(np.asarray(y_pred, dtype=float), 1e-8, 1 - 1e-8)
@@ -120,7 +154,7 @@ def compute_calibration(
     if hl_pvalue < 0.05:
         # This function only measures calibration; it applies nothing. The decision to
         # recalibrate belongs to select_oot_recalibrator(). The old wording claimed a
-        # transform was being applied here, which was never true (Flaws.md finding N26).
+        # transform was being applied here, which was never true (FLAWS-N26).
         logger.warning(
             "[%s] Hosmer-Lemeshow p=%.4f < 0.05 => miscalibrated on this sample. "
             "Whether a recalibrator is fitted is decided by the out-of-time gate.",
@@ -140,6 +174,12 @@ def compute_calibration(
         "hl_pvalue": hl_pvalue,
         "hl_n_evaluated": int(hl_res.get("n_evaluated", 0)),
         "hl_subsampled": bool(hl_res.get("subsampled", False)),
+        # Replicate spread of the subsampled HL p-value. The gate keys off the median, and
+        # the report states the range, because on this data a single 5,000-row draw can
+        # return anything from p=0.03 to p=0.72 for the same well-calibrated slice.
+        "hl_n_replicates": int(hl_res.get("n_replicates", 1)),
+        "hl_pvalue_min": float(hl_res.get("p_value_min", hl_pvalue)),
+        "hl_pvalue_max": float(hl_res.get("p_value_max", hl_pvalue)),
         "n_bins": n_bins,
     }
 
@@ -189,7 +229,7 @@ def fit_platt_calibrator(
 # that same partition. That tests the wrong thing: the calibration failure on this book is
 # an out-of-time era drift (2016-2018 vintages under-predicted by ~35%), which the in-time
 # test cannot see -- it passed at p = 0.13, so no calibrator was ever attached while the
-# report claimed one was (docs/AUDIT.md finding A1).
+# report claimed one was (AUDIT-A1).
 #
 # The replacement mirrors how recalibration is actually governed in a bank:
 #
@@ -289,7 +329,7 @@ def select_oot_recalibrator(
         "split_basis": split_basis,
         # Date bounds of the two slices, so a caller (or a QA guard) can verify that the
         # split really is chronological instead of taking the name on trust
-        # (Flaws.md finding N3).
+        # (FLAWS-N3).
         **(slice_bounds or {}),
         "n_fit": int(len(y_fit)),
         "n_eval": int(len(y_eval)),
@@ -353,7 +393,7 @@ def select_oot_recalibrator(
     # AUC, expected/actual default rate and the HL p-value complete the before/after
     # picture the report tabulates. They are recorded here, on the deployed transform and
     # the held-out later slice, so the report no longer has to rebuild a throwaway
-    # calibrator on the wrong partition to populate that table (Flaws.md finding N6).
+    # calibrator on the wrong partition to populate that table (FLAWS-N6).
     from sklearn.metrics import roc_auc_score  # noqa: PLC0415
 
     def _eval_block(p_arr: np.ndarray, ratio: float, brier: float,
@@ -407,7 +447,7 @@ def chronological_oot_split(
     order = pd.Series(order_key)
     if order.isna().all():
         # Positional fallback. This is NOT an out-of-time split: callers must not
-        # describe it as one (docs/AUDIT.md finding A22).
+        # describe it as one (AUDIT-A22).
         logger.warning(
             "chronological_oot_split: ordering key is entirely missing; falling back to a "
             "POSITIONAL split, which is not out-of-time."

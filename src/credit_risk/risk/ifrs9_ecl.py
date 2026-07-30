@@ -14,9 +14,11 @@ SICR triggers:
       `delinq_2yrs >= 1` — delinquencies recorded in the two years *before* origination.
 
 Stage 3 caveat: with no DPD panel, credit-impaired status is taken from the loan's
-terminal resolved outcome (the modelling target). Stage 3 is therefore a hindsight
-classification, and its ECL contribution (LGD × EAD, PD forced to 1) is insensitive to
-the PD model. See docs/AUDIT.md finding C1.
+resolved outcome (the modelling target). Note that target is not purely terminal --- the
+bad set includes `Late (31-120 days)`, a current delinquency state --- so Stage 3 mixes
+loans that have finished badly with loans that were merely delinquent at the snapshot.
+Either way it is a hindsight classification, and its ECL contribution (LGD × EAD, PD
+forced to 1) is insensitive to the PD model. See AUDIT-C1.
 
 ECL formula (Appendix C):
     ECL = Σ_t  MarginalPD(t) · LGD(t) · EAD(t) · DF(t)
@@ -318,7 +320,7 @@ def run_ifrs9_ecl(
     # scenario: the baseline scenario sits at a non-zero Z (the Vasicek conditional-PD
     # function does not return the unconditional PD at Z=0, so the projection intercept is
     # recentred). Loans were therefore sorted into Stage 1 / Stage 2 under macroeconomic
-    # conditions that appear nowhere else in the calculation (Flaws.md finding N16).
+    # conditions that appear nowhere else in the calculation (FLAWS-N16).
     #
     # Staging now runs under the baseline scenario itself, which is the central expectation
     # the ECL is anchored to.
@@ -333,8 +335,16 @@ def run_ifrs9_ecl(
     term_months = _term_months_from(df, len(df))
     stages = assign_stages(df, pd_lifetime, pd_orig_lifetime, cfg.sicr)
     out["stage"] = stages
-    out["pd_12m"] = pd_12m
     out["pd_lifetime"] = pd_lifetime
+
+    # The hazard model's own 12-month PD gets its own column. It used to be written to
+    # `pd_12m`, which SHADOWED the scorecard-derived 12-month PD the pipeline had already
+    # put on this frame — and every downstream consumer that read `pd_12m` off the ECL
+    # frame silently switched models. The Phase 9 cutoff sweep was one of them, which is how
+    # it came to charge an expected loss of exactly zero at every cutoff on the grid.
+    out["pd_12m_hazard"] = pd_12m
+    if "pd_12m" not in out.columns:
+        out["pd_12m"] = pd_12m
 
     # Weighted ECL across scenarios
     ecl_weighted = np.zeros(len(df))
@@ -372,7 +382,7 @@ def run_ifrs9_ecl(
         "total_ead": total_ead,
         "coverage_ratio": coverage,
         "stage_counts": stage_counts,
-        # Which macro conditions the staging decision was taken under (Flaws.md N16).
+        # Which macro conditions the staging decision was taken under (the internal review log N16).
         "staging_scenario": _staging_scenario.name if _staging_scenario else "none",
         "staging_macro_shock": staging_shock,
         "ecl_by_stage": {
@@ -382,11 +392,15 @@ def run_ifrs9_ecl(
         },
         # Per-stage exposure and 12-month/lifetime PD, so the report can reconcile the
         # one-year EL against the staged, discounted, scenario-weighted ECL
-        # (Flaws.md finding N28).
+        # (FLAWS-N28).
         "ead_by_stage": {
             f"s{s}": float(ead[stages == s].sum()) for s in (1, 2, 3)
         },
         "n_by_stage": {f"s{s}": int((stages == s).sum()) for s in (1, 2, 3)},
+        # Which model the 12-month PD below comes from. The one-year EL the report
+        # reconciles against is built from the SCORECARD's annualised PD, so the two must
+        # be labelled or the reconciliation table silently mixes them.
+        "pd_12m_source": "hazard_model",
         "mean_pd_12m_by_stage": {
             f"s{s}": (float(pd_12m[stages == s].mean()) if (stages == s).any() else 0.0)
             for s in (1, 2, 3)
@@ -405,6 +419,10 @@ def stage_migration_matrix(
     stages_t1: np.ndarray,
 ) -> pd.DataFrame:
     """Compute stage migration matrix from origination to reporting date.
+
+    Not called: reconstructing the stage a loan occupied twelve months ago needs a monthly
+    servicing panel this dataset does not have (the report sets this out in Section 10).
+    Kept so the machinery exists the day such a panel does.
 
     Returns
     -------
@@ -565,7 +583,7 @@ _ALL_MACRO_COLS = ["UNRATE", "GDP_growth", "FEDFUNDS", "CPI_inflation", "HPI_gro
 
 # Per-scenario macro deltas applied on top of the sample-mean baseline.
 #
-# Two defects were fixed here (docs/AUDIT.md finding C5):
+# Two defects were fixed here (AUDIT-C5):
 #
 #   1. DEGENERACY. Both scenarios previously moved FEDFUNDS *down* (-0.5 and -1.5) from a
 #      sample mean of ~0.50. With the 0.1 effective-lower-bound floor applied below, that
@@ -703,7 +721,7 @@ def fit_macro_model(
     # near-neutral (Z ~ 0) instead of being spuriously adverse (was Z ~ -1.54, which
     # inflated ECL coverage and Stage 2 share).
     #
-    # DISCLOSURE (Flaws.md finding N17). This is a THROUGH-THE-CYCLE anchor, not a
+    # DISCLOSURE (FLAWS-N17). This is a THROUGH-THE-CYCLE anchor, not a
     # forward-looking one. IFRS 9 B5.5.42 requires unbiased forward-looking expectations
     # AT THE REPORTING DATE; the sample mean here spans a training window dominated by the
     # financial crisis, so the "baseline" carries materially worse conditions (e.g.
@@ -792,7 +810,7 @@ def fit_macro_model(
             "downside": downside_macro,
         },
         # Basis of the central scenario, and the reporting-date actuals it departs from,
-        # so the report can quantify the TTC-vs-forward-looking gap (Flaws.md N17).
+        # so the report can quantify the TTC-vs-forward-looking gap (the internal review log N17).
         "baseline_basis": "through_the_cycle_training_mean",
         "baseline_macro_ttc": {c: float(ref_macro[c]) for c in macro_cols},
         "macro_at_reporting_date": {c: float(latest_macro[c]) for c in macro_cols},

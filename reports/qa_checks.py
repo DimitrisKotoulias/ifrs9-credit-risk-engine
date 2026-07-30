@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 REL_TOL = 0.001  # 0.1% relative tolerance per upgrades.md Fix 3.3
@@ -348,7 +349,7 @@ def check_recalibration_applied(tex_path: Path, metrics: dict, failures: list[st
     The calibrator is fitted only when the in-time test Hosmer-Lemeshow test rejects. When
     it does not, ``predict_proba`` returns raw PDs and the before/after table is a
     diagnostic. The shipped report previously claimed the transform was "applied to the OOT
-    set", "retained", and feeding EL/RWA/staging (docs/AUDIT.md finding A1).
+    set", "retained", and feeding EL/RWA/staging (AUDIT-A1).
     """
     cal = metrics.get("calibration") or {}
     if cal.get("isotonic_applied") is None and "recalibration_applied" not in cal:
@@ -398,7 +399,7 @@ def check_recalibration_applied(tex_path: Path, metrics: dict, failures: list[st
 def check_cutoff_corner_direction(tex_path: Path, metrics: dict, failures: list[str]) -> None:
     """"Approve everyone" wording is only valid if the unconstrained argmax really is
     full approval. On a book where every grid RAROC is negative the argmax is the most
-    *exclusive* non-empty cutoff (docs/AUDIT.md finding A2)."""
+    *exclusive* non-empty cutoff (AUDIT-A2)."""
     corner = metrics.get("cutoff_raroc_max") or metrics.get("cutoff_profit_argmax") or {}
     if not corner:
         return
@@ -422,7 +423,7 @@ def check_cutoff_corner_direction(tex_path: Path, metrics: dict, failures: list[
 
 def check_capital_charge_rate(tex_path: Path, metrics: dict, failures: list[str]) -> None:
     """The charge netted out of expected profit is the cost of capital, not the RAROC
-    hurdle (docs/AUDIT.md finding A3)."""
+    hurdle (AUDIT-A3)."""
     coc = metrics.get("cutoff_cost_of_capital")
     hurdle = metrics.get("cutoff_raroc_hurdle")
     if coc is None or hurdle is None or abs(float(coc) - float(hurdle)) < 1e-9:
@@ -442,7 +443,7 @@ def check_population_counts(tex_path: Path, metrics: dict, failures: list[str]) 
 
     The abstract previously carried these as hard-coded literals, and the pipeline exposed
     only a mis-named `n_accepted_raw` (actually the resolved-outcome count), so a drifted
-    figure could not be detected (docs/AUDIT.md finding A5).
+    figure could not be detected (AUDIT-A5).
     """
     n_train = int(metrics.get("n_train", 0))
     n_test = int(metrics.get("n_test", 0))
@@ -486,7 +487,7 @@ def check_challenger_feature_parity(metrics: dict, failures: list[str]) -> None:
 
     ``PDChallenger`` used to silently drop requested features missing from the raw frame,
     so the tree models trained on 13 of the scorecard's 15 predictors while the report
-    claimed parity (docs/AUDIT.md findings A12 / B2).
+    claimed parity (AUDIT-A12 / B2).
     """
     shap_rows = (metrics.get("challenger") or {}).get("shap_mean_abs") or []
     if not shap_rows:
@@ -514,7 +515,7 @@ def check_scenario_axes_separate(metrics: dict, failures: list[str]) -> None:
 
     FEDFUNDS previously floored to 0.1 in both scenarios and CPI_inflation carried no
     delta, so two of five axes contributed nothing to scenario separation while the
-    report tabulated them as assumptions (docs/AUDIT.md finding C5).
+    report tabulated them as assumptions (AUDIT-C5).
     """
     inputs = metrics.get("macro_scenario_inputs") or {}
     up, down = inputs.get("upside") or {}, inputs.get("downside") or {}
@@ -540,7 +541,7 @@ def check_no_unescaped_percent(tex_path: Path, failures: list[str]) -> None:
     PDF with no error and no warning. Because the template writes each paragraph as one
     long line, a single stray ``%`` in a value injected from Python can silently remove
     hundreds of characters of evidence -- which is exactly what happened to the
-    recalibration decision in an earlier build (docs/AUDIT.md finding A1).
+    recalibration decision in an earlier build (AUDIT-A1).
 
     Whole-line comments (optionally indented) are legitimate and ignored.
     """
@@ -566,7 +567,7 @@ def check_no_unescaped_percent(tex_path: Path, failures: list[str]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Round 3 guards (Flaws.md).
+# Round 3 guards (the internal review log).
 #
 # Every guard above tests a numeric identity inside metrics.json or bans a fixed
 # phrase. None of them could catch the Round 3 findings, because those were cases
@@ -582,7 +583,7 @@ def check_binner_is_optbinning(metrics: dict, failures: list[str]) -> None:
     ``_try_optbinning`` used to swallow every exception, so an unrelated failure inside
     optbinning (e.g. a scikit-learn incompatibility) quietly substituted a completely
     different binner — different bins, different WoE, different surviving features — and
-    the report still built (Flaws.md finding N32). Set ``allow_fallback_binner: true`` in
+    the report still built (FLAWS-N32). Set ``allow_fallback_binner: true`` in
     metrics.json to override deliberately.
     """
     binner = metrics.get("binner")
@@ -604,7 +605,7 @@ def check_no_phase_failures(metrics: dict, failures: list[str]) -> None:
 
     The xgboost import in pd_challenger.py is the worked example: on a clean install it
     raised, the whole challenger benchmark vanished, and only a non-fatal warning marked
-    it (Flaws.md finding N14).
+    it (FLAWS-N14).
     """
     pf = metrics.get("phase_failures")
     if not pf:
@@ -623,7 +624,7 @@ def check_recalibration_gate_chronology(metrics: dict, failures: list[str]) -> N
 
     The gate fell back to row order whenever no ordering key was passed, which turned an
     out-of-TIME test into a random holdout while the report continued to describe it as
-    chronological (Flaws.md finding N3).
+    chronological (FLAWS-N3).
     """
     gate = (metrics.get("calibration") or {}).get("recalibration_gate") or {}
     if not gate:
@@ -650,7 +651,7 @@ def check_calibration_table_direction(metrics: dict, failures: list[str]) -> Non
 
     The shipped table was built from a throwaway isotonic fitted on the wrong partition,
     so every row moved away from its target directly beside prose reporting an accepted
-    improvement (Flaws.md finding N6).
+    improvement (FLAWS-N6).
     """
     gate = (metrics.get("calibration") or {}).get("recalibration_gate") or {}
     comp = metrics.get("calibration_comparison") or {}
@@ -712,7 +713,7 @@ def check_pd_horizon_consistency(metrics: dict, failures: list[str]) -> None:
     The scorecard target is terminal loan status, i.e. a lifetime default flag. Feeding it
     straight into the IRB formula produced an RWA density of 228.8% and an RWA that
     *falls* under stress, because the IRB capital function is concave and was being
-    evaluated far out on its flat region (Flaws.md finding N1).
+    evaluated far out on its flat region (FLAWS-N1).
     """
     horizon = metrics.get("pd_horizon_basel")
     mean_pd = metrics.get("mean_pd_basel", metrics.get("mean_pd_12m"))
@@ -730,6 +731,17 @@ def check_pd_horizon_consistency(metrics: dict, failures: list[str]) -> None:
         "12-month PD is required (set pd_horizon_basel explicitly to override)",
         failures,
     )
+    # And the mirror-image failure. This check had only an upper bound, so it passed
+    # cheerfully while the hazard model was returning a mean 12-month PD of ~1e-20 and the
+    # Stage 1 provision was exactly zero: the guard written to protect the PD horizon was
+    # blind in the direction the engine actually broke.
+    _check(
+        float(mean_pd) >= 0.002,
+        f"mean PD entering the Basel IRB formula is {float(mean_pd):.3g} — a consumer book "
+        "with a ~20% lifetime default rate cannot have a 12-month PD near zero; the PD "
+        "series feeding Basel is degenerate",
+        failures,
+    )
 
 
 def check_stress_direction(metrics: dict, failures: list[str]) -> None:
@@ -737,7 +749,7 @@ def check_stress_direction(metrics: dict, failures: list[str]) -> None:
 
     It happens when PD is already so high that the concave IRB capital function is past
     its peak, which is itself a symptom of the lifetime-PD problem above
-    (Flaws.md finding N18).
+    (FLAWS-N18).
     """
     base, stressed = metrics.get("total_rwa"), metrics.get("stress_rwa")
     if base is None or stressed is None:
@@ -755,7 +767,7 @@ def check_vintage_calibration_band(metrics: dict, failures: list[str]) -> None:
     """Vintage groups whose predicted/actual ratio is far off must not pass unremarked.
 
     Applying an OOT-era calibrator to the whole book leaves the development vintages
-    over-predicting by ~50% (Flaws.md finding N5).
+    over-predicting by ~50% (FLAWS-N5).
     """
     groups = metrics.get("vintage_calibration") or []
     offenders = []
@@ -781,7 +793,7 @@ def check_feature_selection_stages(metrics: dict, failures: list[str]) -> None:
 
     The report described two stages (IV, VIF) while the code ran four; the two undisclosed
     stages are what removed int_rate despite it carrying the highest IV in the table
-    (Flaws.md finding N29).
+    (FLAWS-N29).
     """
     stages = metrics.get("feature_selection_stages") or {}
     if not stages:
@@ -810,7 +822,7 @@ def check_no_orphan_figures(failures: list[str], figures_root: Path | None = Non
     """Every PNG under reports/figures must be referenced by the report.
 
     Eight were not: four cost real compute every run and were never shown, four were
-    stale artefacts of an older pipeline still tracked in git (Flaws.md finding N37).
+    stale artefacts of an older pipeline still tracked in git (FLAWS-N37).
     """
     root = Path(__file__).resolve().parent
     figures_root = figures_root or (root / "figures")
@@ -840,7 +852,7 @@ def check_model_claims_vs_code(tex_path: Path, metrics: dict, failures: list[str
     """Ban methodological claims the codebase does not implement.
 
     Each phrase below appeared in a shipped report describing a technique that is nowhere
-    in the pipeline (Flaws.md findings N8, N20, N30).
+    in the pipeline (FLAWS-N8, N20, N30).
     """
     text = tex_path.read_text(encoding="utf-8", errors="replace")
     banned = {
@@ -862,7 +874,7 @@ def check_vintage_drift_claim(tex_path: Path, metrics: dict, failures: list[str]
     """A "consistently below X" claim must be true of the table beside it.
 
     The report asserted 2016--2018 PD ratios "consistently below 0.85" directly above a
-    table in which not one row was below 0.85 (Flaws.md finding N7).
+    table in which not one row was below 0.85 (FLAWS-N7).
     """
     rows = metrics.get("pd_backtest_vintage") or []
     if not rows:
@@ -916,7 +928,7 @@ def check_challenger_attribution(tex_path: Path, metrics: dict, failures: list[s
     """A model must not be credited with another model's score.
 
     Section 3.6 attributed the weighted ensemble's OOT AUC of 0.7030 to LightGBM, whose
-    own figure was 0.7027 (Flaws.md finding N34).
+    own figure was 0.7027 (FLAWS-N34).
     """
     rows = metrics.get("ml_benchmark_comparison") or []
     if not rows:
@@ -942,7 +954,7 @@ def check_challenger_attribution(tex_path: Path, metrics: dict, failures: list[s
 
 
 def check_phase_failures_surfaced(tex_path: Path, metrics: dict, failures: list[str]) -> None:
-    """If phases dropped out, the report must say so somewhere (Flaws.md finding N39)."""
+    """If phases dropped out, the report must say so somewhere (FLAWS-N39)."""
     pf = metrics.get("phase_failures") or []
     if not pf:
         return
@@ -999,10 +1011,19 @@ def check_ecl_sensitivity_responds(metrics: dict, failures: list[str]) -> None:
 
 
 def check_page_count(failures: list[str], pdf_path: Path | None = None,
-                     lo: int = 36, hi: int = 40) -> None:
+                     lo: int = 36, hi: int = 41) -> None:
     """Keep the PDF inside its agreed length envelope.
 
-    The envelope is 36-40, not the 33-35 originally sketched in Flaws.md. That target was
+    Raised 40 -> 41 for the July 2026 review round, which added four limitation items
+    (out-of-time sample selection, exposure booked on terminated loans, the training-window
+    macro fit, and the recalibrator's vintage scope) plus the macro-provenance,
+    Hosmer-Lemeshow-subsample and DeLong-covariance sentences. That is one page of
+    disclosure the audit specifically asked for; the alternative was deleting it to protect
+    a page count, which inverts what this check is for. The band is a bloat guard, not a
+    disclosure cap -- if a future round needs another page, widen it deliberately and say
+    what bought the page, as here.
+
+    The envelope is 36-40, not the 33-35 originally sketched in the internal review log. That target was
     costed against roughly 0.8 pages of new disclosure; the Round 3 fixes in fact required
     substantially more -- the four-stage selection funnel, the PD-horizon derivation, the
     proportional-hazards shock equation, the EL-to-ECL reconciliation, the CSI table and
@@ -1028,6 +1049,219 @@ def check_page_count(failures: list[str], pdf_path: Path | None = None,
     )
 
 
+def check_stage1_ecl_nonzero(metrics: dict, failures: list[str]) -> None:
+    """A populated Stage 1 with a zero provision means the 12-month ECL leg is inoperative.
+
+    The hazard panel used to pin every default event to the loan's final month with no
+    censoring, so the fitted 12-month hazard was ~0 and Stage 1 ECL came out at exactly
+    $0.00 across 483,685 loans and $1.24bn of exposure — printed in the report's own
+    reconciliation table, and unguarded.
+    """
+    recon = metrics.get("ecl_reconciliation") or {}
+    ecl_by_stage = recon.get("ecl_by_stage") or {}
+    n_by_stage = recon.get("n_by_stage") or {}
+    if not ecl_by_stage or not n_by_stage:
+        return
+    n_s1 = int(n_by_stage.get("s1", 0))
+    if n_s1 <= 0:
+        return
+    _check(
+        float(ecl_by_stage.get("s1", 0.0)) > 0.0,
+        f"Stage 1 ECL is {float(ecl_by_stage.get('s1', 0.0)):,.2f} across {n_s1:,} Stage 1 "
+        "loans — the 12-month ECL leg of the three-stage model is producing no provision "
+        "at all (check the hazard model's duration/censoring construction)",
+        failures,
+    )
+
+
+def check_hazard_pd12m_nondegenerate(metrics: dict, failures: list[str]) -> None:
+    """The hazard model's 12-month PD must be a probability, not a rounding artefact."""
+    recon = metrics.get("ecl_reconciliation") or {}
+    by_stage = recon.get("mean_pd_12m_by_stage") or {}
+    n_by_stage = recon.get("n_by_stage") or {}
+    if not by_stage:
+        return
+    for stage, mean_pd in by_stage.items():
+        if int(n_by_stage.get(stage, 0)) <= 0:
+            continue
+        _check(
+            float(mean_pd) > 1e-6,
+            f"mean 12-month PD for {stage} is {float(mean_pd):.3g} — degenerate. The "
+            "hazard term structure is producing no default probability inside the first "
+            "twelve months",
+            failures,
+        )
+    basis = metrics.get("hazard_duration_basis")
+    if basis is not None:
+        _check(
+            basis == "payments_observed_censored",
+            f"hazard model duration basis is {basis!r}, not 'payments_observed_censored': "
+            "the person-period panel fell back to the uncensored full-term construction",
+            failures,
+        )
+
+
+def check_cutoff_el_nonzero(metrics: dict, failures: list[str]) -> None:
+    """Every approved book carries credit losses; a zero EL column is a plumbing bug.
+
+    `run_ifrs9_ecl` used to overwrite `pd_12m` on the ECL frame with the hazard model's
+    (degenerate) 12-month PD, and the Phase 9 sweep reads that column — so expected_loss
+    came out at exactly 0.0 for every cutoff and the published RAROC was
+    revenue-minus-costs with no credit loss.
+    """
+    rows = [
+        r for r in (metrics.get("cutoff_strategy_table") or [])
+        if float(r.get("approval_rate", 0.0)) > 0.0
+    ]
+    if not rows:
+        return
+    zero_rows = [r for r in rows if float(r.get("expected_loss", 0.0)) <= 0.0]
+    _check(
+        not zero_rows,
+        f"{len(zero_rows)} of {len(rows)} non-empty cutoffs charge an expected loss of "
+        "zero; the cutoff economics are not netting out credit losses at all "
+        f"(first offender: cutoff {zero_rows[0].get('cutoff') if zero_rows else 'n/a'})",
+        failures,
+    )
+
+    # A zero test alone is too weak: a PD of 1e-20 against a $1bn book still yields a
+    # strictly positive EL. Anchor it instead. At full approval the sweep's EL is
+    # PD_12m x LGD x EAD over (essentially) the same population as the Phase 6 portfolio
+    # Expected Loss, so the two must land in the same ballpark. On the degenerate run they
+    # were $0.00 and $279.7m.
+    total_el = float(metrics.get("total_el", 0.0))
+    full_rows = [r for r in rows if float(r.get("approval_rate", 0.0)) >= 0.999]
+    if not full_rows or total_el <= 0.0:
+        return
+    sweep_el = float(max(full_rows, key=lambda r: float(r["approval_rate"]))["expected_loss"])
+    ratio = sweep_el / total_el
+    _check(
+        0.5 <= ratio <= 2.0,
+        f"cutoff sweep charges {sweep_el:,.0f} of expected loss at full approval against a "
+        f"portfolio Expected Loss of {total_el:,.0f} (ratio {ratio:.3g}) — the two are the "
+        "same quantity on the same book and cannot disagree by this much; the sweep is "
+        "reading a different PD column",
+        failures,
+    )
+
+
+def check_cutoff_raroc_prose(tex_path: Path, metrics: dict, failures: list[str]) -> None:
+    """Prose about the shape of the RAROC grid must match the grid.
+
+    `check_cutoff_corner_direction` bans "full approval" wording when the argmax is an
+    exclusive corner, but has no symmetric guard — so the opposite error shipped: the
+    report asserted "every cutoff on the 400--800 grid returns a negative RAROC" on a run
+    where every grid RAROC was positive, and claimed the profit and RAROC argmaxes
+    "coincide" when they sat at 400 and 610.
+    """
+    rows = [
+        r for r in (metrics.get("cutoff_strategy_table") or [])
+        if float(r.get("approval_rate", 0.0)) > 0.0
+    ]
+    if not rows:
+        return
+    text = tex_path.read_text(encoding="utf-8", errors="replace")
+
+    n_negative = sum(1 for r in rows if float(r.get("raroc", 0.0)) < 0.0)
+    if n_negative < len(rows):
+        _check(
+            "returns a negative RAROC" not in text,
+            f"Report states every cutoff on the grid returns a negative RAROC, but only "
+            f"{n_negative} of {len(rows)} non-empty cutoffs do",
+            failures,
+        )
+
+    profit_argmax = metrics.get("cutoff_profit_argmax") or {}
+    raroc_max = metrics.get("cutoff_raroc_max") or {}
+    if profit_argmax and raroc_max:
+        coincide = int(profit_argmax.get("cutoff", -1)) == int(raroc_max.get("cutoff", -2))
+        if not coincide:
+            _check(
+                "RAROC-maximising cutoff coincide" not in text,
+                "Report says the profit-maximising and RAROC-maximising cutoffs coincide, "
+                f"but they sit at {profit_argmax.get('cutoff')} and "
+                f"{raroc_max.get('cutoff')}",
+                failures,
+            )
+
+
+def check_no_hardcoded_metric_defaults(failures: list[str], renderer_path: Path | None = None) -> None:
+    """The renderer must not carry hand-typed fallbacks for numbers it prints.
+
+    There were 66 ``metrics.get("<key>", <constant>)`` lookups in render_latex.py, 34 of
+    them holding a non-zero figure from a superseded run and nine keys holding *different*
+    constants at different call sites. A single absent key could therefore print two
+    different values for the same quantity in two sections, silently, and every one of
+    those constants would read as a real result. Headline numbers now go through
+    ``_num()``, which raises for required keys and yields a visible "n/a" otherwise.
+    """
+    path = renderer_path or (Path(__file__).resolve().parent / "render_latex.py")
+    if not path.exists():
+        return
+    src = path.read_text(encoding="utf-8")
+    offenders = re.findall(
+        r'metrics\.get\(\s*"([^"]+)"\s*,\s*[0-9][0-9_.eE+-]*\s*\)', src
+    )
+    _check(
+        not offenders,
+        "render_latex.py still falls back to hand-typed constants for metrics "
+        f"{sorted(set(offenders))} — a stale run's numbers can reach the PDF unnoticed. "
+        "Use _num(metrics, key).",
+        failures,
+    )
+
+
+def check_no_unpublished_doc_references(failures: list[str], root: Path | None = None) -> None:
+    """Source comments must not cite files that are not in the repository.
+
+    163 references across 30 files pointed at the two internal review logs, both
+    gitignored. Every one of them was a dead end for anyone reading the
+    published repository. Citations now use stable IDs resolved by ``docs/FINDINGS.md``.
+    """
+    base = root or Path(__file__).resolve().parent.parent
+    # Assembled at runtime so this checker does not match itself.
+    pattern = re.compile("|".join([
+        "docs/" + "AUDIT" + r"\.md",
+        "Flaws" + r"\.md",
+    ]))
+    offenders: list[str] = []
+    for sub in ("src", "reports", "tests", "config", "scripts"):
+        d = base / sub
+        if not d.exists():
+            continue
+        for path in d.rglob("*"):
+            if path.suffix not in {".py", ".yaml", ".yml"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if pattern.search(text):
+                offenders.append(str(path.relative_to(base)))
+    _check(
+        not offenders,
+        f"source files cite unpublished internal notes: {sorted(offenders)[:5]} "
+        "(use a stable ID from docs/FINDINGS.md instead)",
+        failures,
+    )
+
+
+def check_required_metrics_present(metrics: dict, failures: list[str]) -> None:
+    """Every headline key the report prints must exist in metrics.json."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_latex import _REQUIRED_METRICS  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 - renderer not importable in this context
+        return
+    missing = sorted(k for k in _REQUIRED_METRICS if metrics.get(k) is None)
+    _check(
+        not missing,
+        f"metrics.json is missing headline key(s) {missing}; the report would have "
+        "printed a fallback constant for them before this guard existed",
+        failures,
+    )
+
+
 def run_metric_checks(metrics: dict) -> None:
     """Run all metrics.json identity checks; raise QAError listing every failure."""
     failures: list[str] = []
@@ -1043,7 +1277,7 @@ def run_metric_checks(metrics: dict) -> None:
     check_benchmarks_sourced(failures)
     check_challenger_feature_parity(metrics, failures)
     check_scenario_axes_separate(metrics, failures)
-    # Round 3 (Flaws.md)
+    # Round 3 (the internal review log)
     check_binner_is_optbinning(metrics, failures)
     check_no_phase_failures(metrics, failures)
     check_recalibration_gate_chronology(metrics, failures)
@@ -1053,6 +1287,14 @@ def run_metric_checks(metrics: dict) -> None:
     check_vintage_calibration_band(metrics, failures)
     check_feature_selection_stages(metrics, failures)
     check_ecl_sensitivity_responds(metrics, failures)
+    # Round 4: the degenerate 12-month PD chain
+    check_stage1_ecl_nonzero(metrics, failures)
+    check_hazard_pd12m_nondegenerate(metrics, failures)
+    check_cutoff_el_nonzero(metrics, failures)
+    # AUDIT_FINDINGS round: no rendered number may originate from a hand-typed default
+    check_no_hardcoded_metric_defaults(failures)
+    check_required_metrics_present(metrics, failures)
+    check_no_unpublished_doc_references(failures)
     if failures:
         raise QAError(
             "Report QA failed (%d issue(s)):\n  - %s"
@@ -1077,11 +1319,13 @@ def run_tex_checks(tex_path: str | Path, metrics: dict | None = None) -> None:
         check_cutoff_corner_direction(path, metrics, failures)
         check_capital_charge_rate(path, metrics, failures)
         check_population_counts(path, metrics, failures)
-        # Round 3 (Flaws.md)
+        # Round 3 (the internal review log)
         check_model_claims_vs_code(path, metrics, failures)
         check_vintage_drift_claim(path, metrics, failures)
         check_challenger_attribution(path, metrics, failures)
         check_phase_failures_surfaced(path, metrics, failures)
+        # Round 4
+        check_cutoff_raroc_prose(path, metrics, failures)
     check_no_orphan_figures(failures, tex_path=path)
     check_page_count(failures)
     if failures:

@@ -1,5 +1,15 @@
 """Credit cut-off optimisation.
 
+WHAT THE PIPELINE ACTUALLY USES: ``risk_appetite_cutoff`` and ``raroc_argmax_cutoff``. The
+Phase 9 sweep in ``pipeline.py`` builds its own grid with per-loan interest income, funding
+and capital costs.
+
+``sweep_cutoffs`` / ``optimal_cutoff`` / ``run_cutoff_analysis`` below are the earlier
+flat-rate implementation (``profit_good=0.05``, ``loss_bad=0.45`` per unit of exposure).
+They are retained as a simple, self-contained reference version and are exercised by
+``tests/test_business.py``, but nothing in the pipeline calls them and their hardcoded
+rates are not the report's economics.
+
 Sweeps score thresholds, computes approval rate / bad rate / expected profit,
 and finds the optimal cut-off that maximises expected profit.
 
@@ -151,7 +161,7 @@ def raroc_argmax_cutoff(cutoff_strategy: list[dict]) -> dict | None:
     the argmax is the most *exclusive* non-empty cutoff — the smallest, best-quality
     approved book — which is a vacuous operating point rather than a profitable one.
     Callers must read `approval_rate` off the returned row before describing it, and must
-    not assume the inclusive case (docs/AUDIT.md finding A2).
+    not assume the inclusive case (AUDIT-A2).
 
     Reported for context alongside the risk-appetite operating cutoff.
     """

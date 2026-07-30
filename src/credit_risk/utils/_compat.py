@@ -3,7 +3,7 @@
 This lives in the package (not in ``tests/conftest.py``) so that production runs and the
 test suite exercise exactly the same code path. It previously existed as two independent
 copies, which meant a shim regression could turn the tests green while ``make pipeline``
-failed, or vice versa (Flaws.md finding N22).
+failed, or vice versa (FLAWS-N22).
 """
 
 from __future__ import annotations

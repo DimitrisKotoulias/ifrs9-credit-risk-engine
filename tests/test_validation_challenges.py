@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
-from scipy import stats as _scipy_stats
 
 from credit_risk.validation.discrimination import RAGStatus
 from credit_risk.validation.calibration import hosmer_lemeshow_test

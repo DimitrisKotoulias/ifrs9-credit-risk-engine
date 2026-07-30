@@ -88,7 +88,7 @@ def estimate_months_on_book(
     3. Neither → a flat ``0.4 * term`` fallback. This carries no loan-level information
        and its use is recorded by the caller so it cannot pass unnoticed.
 
-    Named ``compute_months_on_book_at_default`` until Flaws.md finding N10: the old name
+    Named ``compute_months_on_book_at_default`` until FLAWS-N10: the old name
     described only case 2, while the EAD model called it for every loan in the portfolio.
 
     Parameters
@@ -115,7 +115,7 @@ def estimate_months_on_book(
     # the split, so in production the payment branch never ran and every loan silently
     # took the `term * 0.4` fallback: EAD became a deterministic function of (term, rate)
     # with no loan-level ageing at all, and a fully repaid 2010 loan still showed ~65%
-    # exposure at the 2018Q4 reporting date (Flaws.md finding N10).
+    # exposure at the 2018Q4 reporting date (FLAWS-N10).
     if "issue_d" in df.columns and reporting_date is not None:
         issued = pd.to_datetime(df["issue_d"], format="%b-%Y", errors="coerce")
         elapsed = (pd.Timestamp(reporting_date) - issued).dt.days / 30.44
@@ -144,7 +144,7 @@ def estimate_months_on_book(
         mob = (total_paid / installment).clip(0.0, term)
     else:
         # Fallback: a flat fraction of term. Carries no loan-level information; callers
-        # record when this branch is taken (Flaws.md finding N10).
+        # record when this branch is taken (FLAWS-N10).
         mob = term * 0.4
 
     return mob.rename("months_on_book")
@@ -187,7 +187,7 @@ class EADModel:
     ) -> None:
         self.min_r2_for_regression = min_r2_for_regression
         # Portfolio reporting date. Supplying it makes exposure a function of each loan's
-        # actual age, instead of a flat fraction of its term (Flaws.md finding N10).
+        # actual age, instead of a flat fraction of its term (FLAWS-N10).
         self.reporting_date = reporting_date
         self._use_regression: bool = False
         self._regression: object | None = None

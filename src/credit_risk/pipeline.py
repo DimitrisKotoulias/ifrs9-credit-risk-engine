@@ -59,7 +59,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     n_test = len(df_test)
     n_oot = len(df_oot)
     # Three distinct populations, reported separately so the report can never conflate
-    # them (docs/AUDIT.md finding A5):
+    # them (AUDIT-A5):
     #   n_accepted_file  - rows in the accepted-loans source file
     #   n_resolved       - loans with a resolved good/bad outcome (post target definition)
     #   n_modelling      - train + test + OOT, i.e. n_resolved minus the excluded grey zone
@@ -90,7 +90,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         base_odds=cfg.scorecard.base_odds,
     )
     _sc_fit_t0 = time.perf_counter()
-    scorecard.fit(df_train, y_train, df_test, y_test)
+    scorecard.fit(df_train, y_train)
     sc_train_time = time.perf_counter() - _sc_fit_t0
     scorecard.save(outputs / "scorecard.pkl")
 
@@ -117,7 +117,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     _iv_tbl = scorecard._woe_transformer.get_iv_table()
     # Which binner produced these bins. A silent fallback to the manual binner yields a
     # different model with different numbers, so it must be recorded, not just logged
-    # (Flaws.md finding N32).
+    # (FLAWS-N32).
     _binner_kind = scorecard.binner_kind
     logger.info("WoE binning produced by: %s", _binner_kind)
     _selection_stages = scorecard.selection_stages
@@ -146,7 +146,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     # Chronological ordering of the OOT window so the recalibration gate can fit on the
     # earlier vintages and validate on the later ones. Without this the gate falls back to
     # row order, which on this data interleaves the two slices across 23 of 36 months and
-    # silently turns an out-of-TIME test into a random split (docs/AUDIT.md finding A22).
+    # silently turns an out-of-TIME test into a random split (AUDIT-A22).
     if "issue_d" not in df_oot.columns:
         raise ValueError(
             "df_oot has no 'issue_d'; the recalibration gate cannot split the OOT window "
@@ -171,17 +171,27 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # Scope the transform to the era the gate learned it from. It is fitted on the
         # earlier half of the OOT window (2016+), and applying it to the 2007-2014
         # development vintages made them over-predict their realised default rate by up
-        # to ~53% (Flaws.md finding N5).
+        # to ~53% (FLAWS-N5).
         _oot_start_year = int(str(cfg.split.oot_cutoff)[:4])
         scorecard.set_calibrator(calibrator, min_issue_year=_oot_start_year)
         logger.info(
             "Recalibrator attached with vintage scope: %s", scorecard.calibration_scope
         )
+        # The scope has to reach the report. It used to live only in this log line, while
+        # Section 7.2 stated flatly that "the PDs feeding Expected Loss, Basel RWA and
+        # IFRS 9 staging are recalibrated" -- true for 2016+ vintages and false for
+        # everything before, which is a large minority of the book carrying raw PDs across
+        # an undisclosed discontinuity at the 2016 boundary.
+        _calibration_scope = scorecard.calibration_scope
+        _calibration_min_year: int | None = _oot_start_year
+    else:
+        _calibration_scope = "none"
+        _calibration_min_year = None
 
     # Fit Model B (Pure Underwriting Scorecard - Circularity-free)
     logger.info("Fitting Model B (Pure Underwriting Scorecard)...")
     # Exported to metrics so the report enumerates what is actually withheld rather than
-    # naming only int_rate/grade (Flaws.md finding N36). Note this list also removes loan
+    # naming only int_rate/grade (FLAWS-N36). Note this list also removes loan
     # size and instalment, which are legitimate application variables, so Model B is a
     # conservative lower bound rather than a pricing-only ablation.
     model_b_excluded = [
@@ -194,7 +204,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         base_odds=cfg.scorecard.base_odds,
         exclude_features=model_b_excluded,
     )
-    scorecard_underwriting.fit(df_train, y_train, df_test, y_test)
+    scorecard_underwriting.fit(df_train, y_train)
     scorecard_underwriting.save(outputs / "scorecard_underwriting.pkl")
 
     pd_train_uw = scorecard_underwriting.predict_proba(df_train)
@@ -238,7 +248,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # demonstrated improvement on the later one. The previous shootout here fitted
         # Platt on TRAIN and scored it against raw PDs on TEST -- the wrong evidence for
         # an out-of-time drift -- and could attach a transform the gate had rejected
-        # (docs/AUDIT.md finding A1).
+        # (AUDIT-A1).
         # (the calibrator, if the gate accepted one, is already attached above)
         _gate = val_metrics["calibration"].get("recalibration_gate", {})
         val_metrics["calibration"]["method_chosen"] = (
@@ -252,7 +262,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # from the one actually deployed, on a different slice from the one the gate
         # judged. Every row of the resulting table moved the wrong way, directly beside
         # prose (correctly) reporting that the gate had accepted an improvement
-        # (Flaws.md finding N6).
+        # (FLAWS-N6).
         #
         # The table is now built from the gate's own record: the deployed transform,
         # measured on the held-out later OOT slice it was accepted on.
@@ -322,16 +332,20 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         "n_accepted_file": int(n_accepted_file),
         "n_resolved_outcome": int(n_resolved),
         # Provenance of the PD model: which binner ran, and how many features survived
-        # each of the four selection stages (Flaws.md findings N32, N29).
+        # each of the four selection stages (FLAWS-N32, N29).
         "binner": _binner_kind,
         "feature_selection_stages": _selection_stages,
         "model_b_excluded_features": list(model_b_excluded),
+        # Which vintages the accepted recalibrator actually touches. Section 7.2 states
+        # this now instead of implying the whole book is recalibrated.
+        "calibration_scope": _calibration_scope,
+        "calibration_min_issue_year": _calibration_min_year,
         # Retained for backward compatibility with existing consumers. Historically this
         # key held the resolved-outcome count despite its name.
         "n_accepted_raw": int(n_resolved),
         "n_rejected_raw": int(n_rejected_raw),
         # Split composition — the report derives its percentages from these rather than
-        # carrying hard-coded literals (docs/AUDIT.md findings A5, A6).
+        # carrying hard-coded literals (AUDIT-A5, A6).
         "train_bad_rate": float(y_train.mean()),
         "test_bad_rate": float(y_test.mean()),
         "oot_bad_rate": float(y_oot.mean()),
@@ -348,7 +362,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # RAGStatus grades train-vs-OOT degradation, so it must be fed the TRAIN Gini.
         # It used to receive metrics["gini"], which is the *test* Gini — making the
         # headline "model stability" verdict a test-vs-OOT comparison that understates
-        # the real degradation (Flaws.md finding N43).
+        # the real degradation (FLAWS-N43).
         _gini_train = float(
             disc.get("train", {}).get("gini", metrics.get("gini", 0.0))
         )
@@ -375,7 +389,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     try:
         from credit_risk.models.pd_challenger import PDChallenger  # noqa: PLC0415
         from credit_risk.models.pd_scorecard import (  # noqa: PLC0415
-            _add_interaction_features, _encode_categoricals,
+            _add_interaction_features, _encode_categoricals, fit_interaction_stats,
         )
         from credit_risk.validation.discrimination import compute_discrimination  # noqa: PLC0415
 
@@ -383,9 +397,15 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # PDScorecard.fit (grade_enc, term_enc, interaction terms). Those are absent from
         # the raw frames, so the challengers must be handed the same engineered frames or
         # they silently train on a smaller feature set and the comparison is unfair
-        # (docs/AUDIT.md A12 / B2). PDChallenger now raises rather than filtering.
+        # (the internal audit log A12 / B2). PDChallenger now raises rather than filtering.
+        # The interaction z-scores use the TRAINING cohort's median/std for every
+        # partition. Deriving them per frame gave the challenger a different transform on
+        # train, test and OOT, which is data-dependent preprocessing and partly undoes the
+        # out-of-time nature of the OOT split.
+        _ch_stats = fit_interaction_stats(df_train)
+
         def _prep_features(frame: pd.DataFrame) -> pd.DataFrame:
-            return _encode_categoricals(_add_interaction_features(frame))
+            return _encode_categoricals(_add_interaction_features(frame, _ch_stats))
 
         df_train_ch = _prep_features(df_train)
         df_test_ch = _prep_features(df_test)
@@ -545,6 +565,31 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                     "train_time_sec": float(benchmark.lgb_train_time + benchmark.xgb_train_time + benchmark.rf_train_time),
                 }
             ]
+
+            # The report calls the Weighted Ensemble the best challenger and says it
+            # "exceeds" the scorecard's OOT discrimination. That claim was never tested:
+            # both the DeLong test and the paired bootstrap above run scorecard vs
+            # LightGBM. Test the row the sentence is actually about, and record the
+            # ensemble's composition so the report can say the challenger contains 30% of
+            # the champion and that its weights are fixed a priori, not optimised.
+            try:
+                from credit_risk.validation.ab_test import paired_bootstrap_gini  # noqa: PLC0415
+                metrics["ab_test_ensemble"] = paired_bootstrap_gini(
+                    y_oot.values, sc_pd_oot, np.asarray(ens_pd_oot, dtype=float),
+                    n_boot=2000, seed=seed,
+                )
+                metrics["ensemble_weights"] = {
+                    "scorecard": 0.3, "lightgbm": 0.3, "xgboost": 0.2, "random_forest": 0.2,
+                    "optimised": False,
+                }
+                logger.info(
+                    "Paired bootstrap A/B (OOT, ensemble vs scorecard): significant=%s",
+                    metrics["ab_test_ensemble"]["significant"],
+                )
+            except Exception as _ens_ab_err:  # noqa: BLE001
+                logger.warning(
+                    "Ensemble paired bootstrap failed (non-fatal): %s", _ens_ab_err
+                )
             logger.info("Multi-Model ML Benchmarking completed successfully!")
         except Exception as mm_err:
             logger.warning("Multi-Model ML Benchmarking failed (non-fatal): %s", mm_err)
@@ -588,13 +633,13 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                 # used to be fitted and plotted here. Neither the figure nor the
                 # shap_mean_abs_bureau metric was referenced anywhere in the report, so a
                 # complete second challenger fit was being paid for nothing
-                # (Flaws.md finding N37). plot_shap_comparison() remains in
+                # (FLAWS-N37). plot_shap_comparison() remains in
                 # reporting/charts.py. Model B in Section 3.6 already carries the
                 # circularity argument this was meant to illustrate.
 
                 # PDP and ICE plots used to be produced here, over 10,000 rows x 4
                 # features. Neither figure was ever referenced by the report, so the cost
-                # bought nothing (Flaws.md finding N37). plot_pdp_grid/plot_ice remain in
+                # bought nothing (FLAWS-N37). plot_pdp_grid/plot_ice remain in
                 # validation/interpretability.py for ad-hoc interrogation of a model.
         except Exception as _shap_err:
             logger.warning("SHAP summary failed (non-fatal): %s", _shap_err)
@@ -608,7 +653,6 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
 
     # LGD model needs post-origination columns (recoveries, funded_amnt) that
     # were stripped by the leakage filter.  Use full_accepted to get them.
-    lgd_cols_needed = ["recoveries", "funded_amnt", "collection_recovery_fee", "total_pymnt"]
     if split.full_accepted is not None:
         # Build a defaults-only DataFrame with both PD features and LGD columns
         full_defaults = split.full_accepted[split.full_accepted[TARGET_COL] == 1].copy()
@@ -719,7 +763,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     from credit_risk.models.ead import EADModel  # noqa: PLC0415
 
     # Exposure is measured at the reporting date, so months on book is each loan's actual
-    # age at that date rather than a flat fraction of its term (Flaws.md finding N10).
+    # age at that date rather than a flat fraction of its term (FLAWS-N10).
     ead_model = EADModel(reporting_date=cfg.reporting_date)
     ead_model.fit(df_train)
     metrics["ead_mob_basis"] = ead_model.mob_basis
@@ -738,7 +782,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     # the IRB stress test. Feeding them the lifetime figure produced a mean PD of ~0.245,
     # an RWA density of 228.8%, and an RWA that FELL under an extreme shock — the last
     # because the IRB capital function is concave and was being evaluated past its peak
-    # (Flaws.md findings N1, N2, N18).
+    # (FLAWS-N1, N2, N18).
     #
     # Converting under a constant marginal-hazard assumption over the loan's term:
     #     PD_12m = 1 - (1 - PD_lifetime) ** (12 / term_months)
@@ -789,12 +833,24 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     logger.info("=== Phase 6: Expected Loss ===")
     from credit_risk.risk.expected_loss import run_expected_loss  # noqa: PLC0415
 
-    # 12-month PD: EL here is charged against a one-year horizon (Flaws.md N1).
+    # 12-month PD: EL here is charged against a one-year horizon (the internal review log N1).
     df_el = run_expected_loss(df_all, pd_col="pd_12m")
     df_el.to_parquet(outputs / "portfolio_el.parquet", index=False)
     el_summary = df_el.attrs.get("el_summary", {})
     metrics["total_el"] = el_summary.get("total_el", 0.0)
     metrics["total_ead_portfolio"] = el_summary.get("total_ead", 0.0)
+
+    # Share of exposure the recalibrator does NOT touch. Section 7.2 quotes it, so the
+    # reader can see how much of the book still carries raw model PDs.
+    if _calibration_min_year is not None and "issue_d" in df_all.columns:
+        _yr = pd.to_datetime(df_all["issue_d"], format="%b-%Y", errors="coerce").dt.year
+        _out_of_scope = (_yr < _calibration_min_year).to_numpy(dtype=bool)
+        _ead_all = df_all["ead"].to_numpy(dtype=float)
+        _tot = float(_ead_all.sum())
+        metrics["calibration_out_of_scope_ead_share"] = (
+            float(_ead_all[_out_of_scope].sum() / _tot) if _tot > 0 else 0.0
+        )
+        metrics["calibration_out_of_scope_loan_share"] = float(_out_of_scope.mean())
     metrics["el_rate"] = el_summary.get("el_rate", 0.0)
 
     # ── Phase 7: Basel IRB ────────────────────────────────────────────────────
@@ -802,7 +858,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     from credit_risk.risk.basel_irb import run_basel_irb  # noqa: PLC0415
 
     downturn_lgd = float(lgd_model.downturn_lgd) if lgd_model.downturn_lgd > 0 else 0.45
-    # BCBS §328 is a one-year formula (Flaws.md N1).
+    # BCBS §328 is a one-year formula (the internal review log N1).
     df_rwa = run_basel_irb(
         df_el, pd_col="pd_12m", lgd_downturn=downturn_lgd, pd_floor=cfg.basel.pd_floor
     )
@@ -820,7 +876,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
 
         # Headline EC uses the SAME supervisory correlation curve as the IRB calculation
         # it is compared against, so the EC/RegCap ratio reflects tail fidelity rather
-        # than a 5x difference in rho (Flaws.md finding N13). The flat-rho run is retained
+        # than a 5x difference in rho (FLAWS-N13). The flat-rho run is retained
         # immediately below as an explicitly labelled correlation sensitivity.
         ec_losses, ec_measures = run_economic_capital(
             df_rwa,
@@ -870,7 +926,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             "rho": "supervisory (BCBS Other Retail curve, per PD bucket)",
             # A 99.9% quantile from 50,000 draws rests on ~50 tail observations, so the
             # figure is quoted with its own Monte Carlo standard error rather than to two
-            # decimal places of false precision (Flaws.md finding N13, secondary).
+            # decimal places of false precision (FLAWS-N13, secondary).
             "var_mc_stderr": float(
                 np.std(ec_losses[ec_losses >= ec_measures["var"]], ddof=1)
                 / np.sqrt(max(1, int((ec_losses >= ec_measures["var"]).sum())))
@@ -886,7 +942,11 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         from credit_risk.risk.concentration import run_concentration  # noqa: PLC0415
         from credit_risk.reporting.charts import plot_concentration  # noqa: PLC0415
 
-        conc_summary, conc_grouped = run_concentration(df_rwa, rho=cfg.econ_cap.rho)
+        # pd_col is explicit: the default is `pd_pred`, the LIFETIME PD, while the capital
+        # number this granularity adjustment is added to is built from the 12-month PD.
+        # Computing the surcharge on a different horizon from the capital it surcharges is
+        # not a small inconsistency — lifetime PD is ~3x the 12-month figure here.
+        conc_summary, conc_grouped = run_concentration(df_rwa, pd_col="pd_12m")
         metrics["concentration"] = conc_summary
         if conc_grouped:
             plot_concentration(conc_grouped, figs)
@@ -900,8 +960,29 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     from credit_risk.models.pd_term_structure import DiscreteHazardModel  # noqa: PLC0415
     from credit_risk.risk.ifrs9_ecl import IFRS9Config, SICRConfig, ScenarioConfig, run_ifrs9_ecl  # noqa: PLC0415
 
+    # Fit on the PRE-leakage-filter training cohort, exactly as the survival challenger in
+    # Phase 8b does. The hazard panel needs a duration to censor on, and the only duration
+    # proxy this data supports comes from the payment columns — which the leakage deny-list
+    # strips from df_train. Fitted on df_train alone the model silently fell back to the
+    # uncensored full-term construction, whose 12-month hazard is ~0, which zeroed the whole
+    # IFRS 9 Stage 1 provision. The payment columns are used ONLY to place the event in
+    # time; the predictors are unchanged origination covariates.
+    if split.full_accepted is not None and "issue_d" in split.full_accepted.columns:
+        _hz_train_issues = set(df_train["issue_d"].unique())
+        hazard_cohort = split.full_accepted[
+            split.full_accepted["issue_d"].isin(_hz_train_issues)
+        ]
+    else:
+        hazard_cohort = df_train
+
     hazard_model = DiscreteHazardModel(max_horizon=60, seed=seed)
-    hazard_model.fit(df_train)
+    hazard_model.fit(hazard_cohort)
+    metrics["hazard_duration_basis"] = hazard_model.duration_basis
+    if hazard_model.duration_basis != "payments_observed_censored":
+        logger.warning(
+            "Hazard model fell back to the uncensored full-term panel (non-fatal): "
+            "12-month PD and IFRS 9 Stage 1 ECL will be degenerate."
+        )
     with open(outputs / "hazard_model.pkl", "wb") as f:
         pickle.dump(hazard_model, f)
 
@@ -910,7 +991,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     # This model produces the lifetime PD that drives the entire ECL, yet it carried no
     # discrimination metric at all, while its Cox *challenger* reported a C-index. The
     # champion was the unvalidated one; Section 6.2 only ever validated the PD *level*
-    # (lifetime calibration by vintage), never the ranking (Flaws.md finding N44).
+    # (lifetime calibration by vintage), never the ranking (FLAWS-N44).
     try:
         from credit_risk.validation.discrimination import compute_discrimination  # noqa: PLC0415
 
@@ -965,6 +1046,11 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     # Train OLS macro model to derive scenario shocks dynamically
     from credit_risk.risk.ifrs9_ecl import fit_macro_model  # noqa: PLC0415
     macro_path = "data/processed/macro_quarterly.csv"
+    # Provenance of the macro series: the live FRED pull and the bundled offline table are
+    # different data, and the report must not claim the former when it used the latter.
+    from credit_risk.data.download_macro import macro_source as _macro_source  # noqa: PLC0415
+
+    metrics["macro_source"] = _macro_source(macro_path)
     macro_shocks = fit_macro_model(
         df_train,
         macro_path,
@@ -977,10 +1063,16 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         from credit_risk.validation.macro_ts import (  # noqa: PLC0415
             analyze_macro_timeseries, build_quarterly_macro_frame,
         )
-        _macro_q = build_quarterly_macro_frame(df_train, macro_path)
+        # Same lag as production (fit_macro_model), so the Granger/ADF evidence describes
+        # the series the deployed model is actually fitted on. This merge used to be
+        # contemporaneous while production lagged two quarters.
+        _macro_q = build_quarterly_macro_frame(
+            df_train, macro_path, macro_lag_quarters=cfg.ifrs9.macro_unrate_lag
+        )
         metrics["macro_ts"] = analyze_macro_timeseries(
             _macro_q, max_lag=cfg.macro_ts.max_lag
         )
+        metrics["macro_ts_lag_quarters"] = int(cfg.ifrs9.macro_unrate_lag)
         logger.info("Macro time-series diagnostics computed (%d quarters).", len(_macro_q))
     except Exception as _mts_err:  # noqa: BLE001
         logger.warning("Macro TS diagnostics failed (non-fatal): %s", _mts_err)
@@ -1052,10 +1144,10 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
 
     # A term-scaled lifetime PD (pd_lifetime_sc) used to be derived here from the
     # scorecard PD. Its only consumer was the stage-migration reconstruction, which has
-    # been withdrawn (Flaws.md finding N9); it was never passed to assign_stages as
+    # been withdrawn (FLAWS-N9); it was never passed to assign_stages as
     # `pd_orig_lifetime`, because doing so made the relative SICR ratio a comparison of
     # two models' PDs at the same date rather than a measure of credit deterioration
-    # (docs/AUDIT.md finding B4). Both it and its inputs are therefore gone.
+    # (AUDIT-B4). Both it and its inputs are therefore gone.
 
     # No genuine origination-date PD exists, so the relative SICR trigger is not
     # evaluable. Passing None skips it honestly; the absolute-threshold and delinquency
@@ -1074,7 +1166,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     n_total = sum(stage_counts.values()) or 1
     metrics["stage2_pct"] = stage_counts.get(2, 0) / n_total
     metrics["stage3_pct"] = stage_counts.get(3, 0) / n_total
-    # EL -> ECL reconciliation inputs (Flaws.md finding N28): the two headline provisions
+    # EL -> ECL reconciliation inputs (FLAWS-N28): the two headline provisions
     # differ by only ~3% while measuring very different things, and the report had no way
     # to show the reader why.
     metrics["ecl_reconciliation"] = {
@@ -1085,6 +1177,10 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         "ecl_by_stage": ifrs9_summary.get("ecl_by_stage", {}),
         "ead_by_stage": ifrs9_summary.get("ead_by_stage", {}),
         "n_by_stage": ifrs9_summary.get("n_by_stage", {}),
+        # The staged 12-month PD comes from the hazard model; the one-year EL row it is
+        # reconciled against comes from the scorecard's annualised PD. Two different
+        # models, so the source is carried through and the report labels the column.
+        "pd_12m_source": ifrs9_summary.get("pd_12m_source", "hazard_model"),
         "mean_pd_12m_by_stage": ifrs9_summary.get("mean_pd_12m_by_stage", {}),
         "mean_pd_lifetime_by_stage": ifrs9_summary.get("mean_pd_lifetime_by_stage", {}),
     }
@@ -1124,7 +1220,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
     # than Stage 1 -> Stage 2 deteriorations on a book whose default rate was rising, and
     # a structurally empty Stage 3 row. Without a monthly servicing panel no honest
     # migration matrix can be built from this data, so the report explains the absence
-    # instead of presenting an artefact (Flaws.md finding N9).
+    # instead of presenting an artefact (FLAWS-N9).
     # stage_migration_matrix() remains in risk/ifrs9_ecl.py for use once panel data exists.
 
     # ECL macro sensitivity tornado
@@ -1181,11 +1277,30 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # to those hardcoded numbers, with a continuous np.linspace threshold in place of
         # an integer grid cutoff: different economics, different semantics, no warning.
         # The single RAROC sweep below is now the only cutoff optimisation
-        # (Flaws.md finding N21).
+        # (FLAWS-N21).
         try:
             logger.info("Computing Expected Profit and RAROC cutoff strategy sweep...")
             df_ecl_copy = df_ecl.copy()
             df_ecl_copy["score"] = np.asarray(scorecard.predict_score(df_ecl_copy), dtype=float)
+
+            # The sweep's expected-loss term must use the SCORECARD's annualised 12-month
+            # PD, which is what the report's Section 9 formula describes. run_ifrs9_ecl used
+            # to overwrite `pd_12m` with the hazard model's 12-month PD (~1e-20), so every
+            # row of the grid came out with expected_loss = 0 and the reported profit and
+            # RAROC were revenue-minus-costs with no credit loss at all. Fail loudly rather
+            # than shipping that again.
+            if "pd_12m" not in df_ecl_copy.columns:
+                raise ValueError(
+                    "Cutoff sweep: 'pd_12m' missing from the ECL frame; the annualised "
+                    "scorecard PD is required for the per-annum P&L."
+                )
+            _mean_pd_cutoff = float(df_ecl_copy["pd_12m"].mean())
+            if _mean_pd_cutoff < 1e-6:
+                raise ValueError(
+                    f"Cutoff sweep: mean 12-month PD is {_mean_pd_cutoff:.3g}, which is "
+                    "degenerate — the expected-loss term would be zero at every cutoff. "
+                    "Check that run_ifrs9_ecl is not shadowing 'pd_12m'."
+                )
 
             # Cut-off economics from config (RAROC-hurdle decision rule)
             _fee_r = cfg.business.fee_income_rate
@@ -1212,10 +1327,8 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                     
                 ead_app = df_app["ead"].values
                 # 12-month PD, to match the one year of interest and fee income below.
-                pd_app = (
-                    df_app["pd_12m"].values if "pd_12m" in df_app.columns
-                    else df_app["pd_pred"].values
-                )
+                # Presence and non-degeneracy are validated once, before the loop.
+                pd_app = df_app["pd_12m"].values
                 lgd_app = df_app["lgd_pred"].values if "lgd_pred" in df_app.columns else (df_app["lgd"].values if "lgd" in df_app.columns else np.full(n_app, 0.45))
                 from credit_risk.risk.ifrs9_ecl import normalize_int_rate_to_fraction  # noqa: PLC0415
 
@@ -1232,7 +1345,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                 # asserted pd_pred was "already a 12-month PD" and pointed at a variable
                 # that no longer existed; it was wrong, and charging the full lifetime PD
                 # against a single year of income overstated losses by roughly the loan
-                # term (Flaws.md findings N1, N2).
+                # term (FLAWS-N1, N2).
                 pd_annual = np.clip(pd_app, 0.0, 0.999999)
                 el = float((pd_annual * lgd_app * ead_app).sum())
 
@@ -1240,7 +1353,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                 capital_charge = float((k_app * ead_app).sum())
                 capital_cost = float(_coc * capital_charge)
 
-                # Two distinct quantities, deliberately kept apart (Flaws.md finding N12):
+                # Two distinct quantities, deliberately kept apart (FLAWS-N12):
                 #   economic_profit = revenue - costs - EL - cost of capital
                 #   RAROC           = (revenue - costs - EL) / economic capital
                 # RAROC must NOT net out the cost of capital: the hurdle comparison is
@@ -1277,7 +1390,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             # both netted out, so when every grid RAROC comes out negative the argmax is
             # the most EXCLUSIVE non-empty cutoff (a near-zero-volume book), not "approve
             # everyone". The report derives its wording from approval_rate rather than
-            # asserting either case (docs/AUDIT.md finding A2).
+            # asserting either case (AUDIT-A2).
             _nonempty = [r for r in cutoff_strategy if r["approval_rate"] > 0.0]
             if _nonempty:
                 _argmax_row = max(_nonempty, key=lambda r: r["expected_profit"])
@@ -1286,16 +1399,35 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                 if _raroc_row:
                     metrics["cutoff_raroc_max"] = dict(_raroc_row)
 
-                # Recommended operating cutoff: profit maximisation subject to the board
-                # risk-appetite ceiling on the approved bad rate → well-defined interior
-                # cutoff. A single optimum drives the text, table and figure.
-                _opt_row = risk_appetite_cutoff(cutoff_strategy, max_bad_rate=_max_bad) or _argmax_row
+                # Recommended operating cutoff: the most inclusive score whose approved bad
+                # rate stays under the board risk-appetite ceiling. Naming matters here --
+                # this is NOT a profit optimum and NOT a marginal-RAROC-hurdle rule, both
+                # of which the codebase used to call it in three different places. A single
+                # rule drives the text, table and figure.
+                _appetite_row = risk_appetite_cutoff(cutoff_strategy, max_bad_rate=_max_bad)
+                if _appetite_row is None:
+                    logger.warning(
+                        "No cutoff on the grid keeps the approved bad rate under %.1f%%; "
+                        "falling back to the unconstrained profit argmax (cutoff=%d, "
+                        "approval=%.1f%%, bad=%.2f%%). This is a DIFFERENT decision rule "
+                        "from the one the report describes.",
+                        _max_bad * 100, int(_argmax_row["cutoff"]),
+                        _argmax_row["approval_rate"] * 100, _argmax_row["bad_rate"] * 100,
+                    )
+                _opt_row = _appetite_row or _argmax_row
+                metrics["cutoff_rule"] = (
+                    "risk_appetite" if _appetite_row is not None else "profit_argmax_fallback"
+                )
+                metrics["cutoff_risk_appetite"] = dict(_opt_row)
+                # Legacy key, kept so a stale metrics.json still renders. The name is
+                # wrong -- this row is not the profit optimum -- and the renderer prefers
+                # `cutoff_risk_appetite`.
                 metrics["cutoff_optimal_profit"] = dict(_opt_row)
                 metrics["cutoff_raroc_hurdle"] = float(_hurdle)
                 metrics["cutoff_max_bad_rate"] = float(_max_bad)
                 # The rate actually charged against economic capital in the profit
                 # calculation. Distinct from the hurdle, which is only the comparison
-                # threshold (docs/AUDIT.md finding A3).
+                # threshold (AUDIT-A3).
                 metrics["cutoff_cost_of_capital"] = float(_coc)
                 # Headline cutoff metrics come from the risk-appetite operating cutoff.
                 metrics["optimal_cutoff_threshold"] = float(_opt_row["cutoff"])
@@ -1315,7 +1447,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         except Exception as _raroc_err:
             # Fatal by design. This sweep is now the sole source of every cutoff number
             # in the report; letting it fail quietly would leave Section 9 with either
-            # missing or (previously) silently substituted figures (Flaws.md finding N21).
+            # missing or (previously) silently substituted figures (FLAWS-N21).
             logger.error("RAROC cutoff strategy sweep failed: %s", _raroc_err)
             raise
 
@@ -1335,7 +1467,7 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         # The score-band stability heatmap used to be produced here. It was never
         # referenced by the report, and the per-feature CSI table (Section 7.6) answers
         # the same question in a form the report actually shows, so the figure is no
-        # longer generated (Flaws.md finding N37). score_band_stability_heatmap() remains
+        # longer generated (FLAWS-N37). score_band_stability_heatmap() remains
         # available in validation/backtest.py for ad-hoc analysis.
 
     # ── Phase 9b: Reject Inference (Parcelling) ──────────────────────────────
@@ -1357,9 +1489,14 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
                 woe_variables=scorecard._woe_transformer.variables_,
             )
 
-            # Prepare both datasets with interaction features and categorical encoding
-            df_train_prep = _encode_categoricals(_add_interaction_features(df_train))
-            df_rej_prep = _encode_categoricals(_add_interaction_features(df_rej_aligned))
+            # Prepare both datasets with interaction features and categorical encoding,
+            # using the champion scorecard's own fitted z-score moments so accepts and
+            # rejects are put on one scale rather than each on its own.
+            _ri_stats = getattr(scorecard, "_interaction_stats", None) or None
+            df_train_prep = _encode_categoricals(_add_interaction_features(df_train, _ri_stats))
+            df_rej_prep = _encode_categoricals(
+                _add_interaction_features(df_rej_aligned, _ri_stats)
+            )
 
             # Transform raw accepted features to WoE
             df_train_woe = scorecard._woe_transformer.transform(df_train_prep[scorecard._woe_transformer.variables_].fillna(-9999))
@@ -1393,13 +1530,13 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
 
     # ── Phase 9c: Basel IRB Stress Testing ────────────────────────────────────
     logger.info("=== Phase 9c: Basel IRB Stress Testing ===")
-    from credit_risk.risk.basel_irb import irb_capital_requirement, irb_rwa  # noqa: PLC0415
+    from credit_risk.risk.basel_irb import irb_rwa  # noqa: PLC0415
     from scipy.special import ndtr, ndtri  # noqa: PLC0415
     try:
         # The stress test feeds the same one-year IRB formula as the base case, so it must
         # start from the same one-year TTC PD. Starting from the lifetime PD (~0.245) put
         # the concave IRB capital function past its peak, which is why stressing PD up to
-        # ~60% made RWA *fall* by 2.6% (Flaws.md findings N1, N18).
+        # ~60% made RWA *fall* by 2.6% (FLAWS-N1, N18).
         _pd_ttc_col = "pd_12m" if "pd_12m" in df_all.columns else "pd_pred"
         pd_ttc = np.clip(df_all[_pd_ttc_col].values, 1e-9, 1 - 1e-9)
         z_ttc = ndtri(pd_ttc)
@@ -1411,12 +1548,11 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
         
         # Calculate stressed unexpected losses and capital charges
         stressed_lgd = float(lgd_model.downturn_lgd) if lgd_model.downturn_lgd > 0 else 0.45
-        stressed_k = irb_capital_requirement(pd_stress, np.full(len(df_all), stressed_lgd), pd_floor=cfg.basel.pd_floor)
         stressed_rwa_arr = irb_rwa(pd_stress, np.full(len(df_all), stressed_lgd), df_all["ead"].values, pd_floor=cfg.basel.pd_floor)
         
         # Isolate the PD effect: base EL uses the per-loan predicted LGD, so the stressed
         # EL must too, or the reported increase silently blends in an LGD switch
-        # (docs/AUDIT.md finding B6). The downturn LGD stays where it belongs — in the
+        # (AUDIT-B6). The downturn LGD stays where it belongs — in the
         # capital calculation, which uses it in the base case as well.
         _lgd_for_el = (
             df_all["lgd_pred"].values if "lgd_pred" in df_all.columns
@@ -1434,10 +1570,19 @@ def run_pipeline(cfg_path: Path | None = None) -> None:  # noqa: C901
             metrics["stress_el"], metrics["stress_rwa"], metrics["stress_capital_req"]
         )
     except Exception as st_err:
-        logger.warning("IRB Capital Stress Test failed: %s", st_err)
-        metrics["stress_el"] = metrics.get("total_el", 0.0) * 1.5
-        metrics["stress_rwa"] = metrics.get("total_rwa", 0.0) * 1.8
-        metrics["stress_capital_req"] = metrics["stress_rwa"] * cfg.basel.capital_ratio
+        # No invented numbers. This used to write total_el * 1.5 and total_rwa * 1.8 --
+        # figures with no computation behind them that flowed into the report as stress
+        # results and even PASSED check_stress_direction, because 1.8 > 1. A failed stress
+        # test is recorded as a failure; the report says the test did not run.
+        logger.warning(
+            "IRB Capital Stress Test failed (non-fatal): %s. No stress figures will be "
+            "reported for this run.", st_err,
+        )
+        metrics["stress_test_status"] = f"failed: {st_err}"
+        for _k in ("stress_el", "stress_el_downturn_lgd", "stress_rwa", "stress_capital_req"):
+            metrics.pop(_k, None)
+    else:
+        metrics["stress_test_status"] = "ok"
 
     # ── Write metrics.json ─────────────────────────────────────────────────────
     logging.getLogger("credit_risk").removeHandler(_nf_handler)

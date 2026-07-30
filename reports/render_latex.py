@@ -6,7 +6,13 @@ from collections import defaultdict
 from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 from qa_checks import run_metric_checks, run_tex_checks  # noqa: E402
+from credit_risk.validation.backtest import (  # noqa: E402
+    VINTAGE_PASS_BAND,
+    vintage_band_text,
+    vintage_calibration_flag as _vintage_flag,
+)
 
 
 
@@ -16,7 +22,7 @@ def tex_escape(text: str) -> str:
     Critically this covers ``%``: an unescaped percent sign is a LaTeX comment, so it
     silently deletes the remainder of the source line from the rendered PDF without any
     error. A diagnostic string such as "ratio outside +/-10%" swallowed 737 characters of
-    the recalibration evidence in an earlier build (docs/AUDIT.md finding A1).
+    the recalibration evidence in an earlier build (AUDIT-A1).
     """
     if not isinstance(text, str):
         return text
@@ -31,13 +37,55 @@ def tex_escape(text: str) -> str:
     return text
 
 
+# Keys the report cannot honestly print without. Anything here that is absent from
+# metrics.json aborts the build instead of silently substituting a number.
+_REQUIRED_METRICS = frozenset({
+    "auc", "gini", "ks", "auc_oot", "gini_oot", "ks_oot",
+    "mean_lgd", "downturn_lgd",
+    "total_el", "el_rate", "total_ecl", "ecl_coverage",
+    "total_rwa", "total_rwa_sa", "total_ead_portfolio",
+    "stage3_pct",
+    "optimal_cutoff_threshold", "optimal_approval_rate", "optimal_bad_rate",
+    "cutoff_raroc_hurdle", "cutoff_max_bad_rate", "cutoff_cost_of_capital",
+})
+
+
+def _num(metrics: dict, key: str, *, required: bool | None = None) -> float:
+    """Read a number out of metrics.json — never fall back to a hand-typed constant.
+
+    The renderer used to be full of ``_num(metrics, "total_rwa")``-style lookups:
+    66 of them, 34 carrying a non-zero constant left over from an old run, and nine keys
+    carrying *different* constants at different call sites (``total_rwa`` appeared as
+    ``0``, ``0.0`` and ``67238352``). A single missing key could therefore make two
+    sections of the same report print two different values for the same quantity, with no
+    error anywhere. That is exactly the failure mode ``reports/benchmarks.py`` was written
+    to prevent for the literature table.
+
+    Required keys raise. Everything else returns NaN, which the ``fmt_*`` helpers render as
+    a visible ``n/a`` rather than as a plausible-looking number.
+    """
+    val = metrics.get(key)
+    if val is None:
+        must_have = (key in _REQUIRED_METRICS) if required is None else required
+        if must_have:
+            raise KeyError(
+                f"metrics.json is missing '{key}', which the report prints as a headline "
+                "number. Re-run the pipeline; the renderer will not invent a value."
+            )
+        return float("nan")
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def _target_status_sets(project_root: str) -> tuple[str, str]:
     """Render the bad/good loan-status sets straight from config/config.yaml.
 
     The target equation used to be a hand-typed literal that had drifted away from the
     configuration: it omitted the two "Does not meet the credit policy" statuses and
     described the definition as the BCBS 90+ DPD standard, which it is not
-    (Flaws.md finding N11).
+    (FLAWS-N11).
     """
     import yaml  # noqa: PLC0415
 
@@ -86,7 +134,7 @@ def render_latex():
         why a feature is or is not in the final model. Without that column the reader
         cannot reconcile this ranking with the selected-feature list at all: int_rate
         carries the highest IV in the table and is absent from the model, dropped by the
-        ElasticNet stage the report used not to mention (Flaws.md findings N29, page budget).
+        ElasticNet stage the report used not to mention (FLAWS-N29, page budget).
         """
         if not iv_rows:
             return r"\textit{No IV data available.}"
@@ -154,7 +202,7 @@ def render_latex():
 
         Computed by the pipeline since the stability phase was added but never rendered,
         which left the PSI narrative with no way to say *where* the population did or did
-        not move (Flaws.md findings N38, N40).
+        not move (FLAWS-N38, N40).
         """
         if not csi_rows:
             return r"\textit{No CSI data available for this run.}"
@@ -204,7 +252,7 @@ def render_latex():
         The two headline provisions differ by only a few percent while measuring very
         different things, and the report offered the reader no way to see why. The stage
         split makes the dominant driver visible: Stage 3, provisioned at LGDxEAD with PD
-        forced to 1, carries most of both figures (Flaws.md finding N28).
+        forced to 1, carries most of both figures (FLAWS-N28).
         """
         if not recon or not recon.get("ecl_by_stage"):
             return r"\textit{No stage-level reconciliation available for this run.}"
@@ -224,7 +272,7 @@ def render_latex():
             r"\vspace{0.5em}",
             r"\begin{tabular}{lrrrrr}",
             r"\toprule",
-            r"\textbf{Stage} & \textbf{Loans} & \textbf{EAD} & \textbf{Mean PD (12m)} "
+            r"\textbf{Stage} & \textbf{Loans} & \textbf{EAD} & \textbf{Mean PD (12m, haz.)} "
             r"& \textbf{Mean PD (life)} & \textbf{ECL} \\",
             r"\midrule",
         ]
@@ -238,20 +286,39 @@ def render_latex():
                 f"{float(pdlt_by.get(key, 0.0))*100:.2f}\\% & "
                 f"\\${float(ecl_by.get(key, 0.0))/1e9:,.2f}bn \\\\"
             )
+        # Whether the two totals are close is a property of the run, not a standing fact.
+        # This note asserted proximity ("close in magnitude", "their similarity is a
+        # coincidence of offsetting effects") while the table beside it printed $1.35bn
+        # against $0.28bn.
+        _el_v = float(total_el)
+        _ratio = (total_ecl_v / _el_v) if _el_v > 0 else 0.0
+        if 0.8 <= _ratio <= 1.25:
+            _proximity = (
+                r"the two totals are close in magnitude but are not the same quantity, and "
+                r"their similarity is a coincidence of offsetting effects rather than a "
+                r"mutual validation. "
+            )
+        else:
+            _proximity = (
+                f"the ECL is {_ratio:.1f}$\\times$ the one-year Expected Loss. That is a gap "
+                r"between two differently-defined quantities, not a discrepancy. "
+            )
         lines += [
             r"\midrule",
             f"\\textbf{{Total IFRS 9 ECL}} & & & & & \\textbf{{\\${total_ecl_v/1e9:,.2f}bn}} \\\\",
-            f"\\textbf{{One-year Expected Loss}} & & & & & \\textbf{{\\${float(total_el)/1e9:,.2f}bn}} \\\\",
+            f"\\textbf{{One-year Expected Loss}} & & & & & \\textbf{{\\${_el_v/1e9:,.2f}bn}} \\\\",
             r"\bottomrule",
-            r"\multicolumn{6}{p{0.92\linewidth}}{\footnotesize \textit{Note:} the two "
-            r"totals are close in magnitude but are not the same quantity. Expected Loss is "
+            r"\multicolumn{6}{p{0.92\linewidth}}{\footnotesize \textit{Note:} " + _proximity +
+            r"Expected Loss is "
             r"$PD_{\text{12m}} \times LGD \times EAD$ over one year, undiscounted and with "
             r"no staging. ECL applies a 12-month horizon to Stage~1, a lifetime horizon to "
             r"Stage~2, and $PD = 1$ to Stage~3, discounts at the effective interest rate, "
-            r"and probability-weights across macro scenarios. Their similarity is a "
-            r"coincidence of offsetting effects, not a validation: the Stage~3 column "
+            r"and probability-weights across macro scenarios. The Stage~3 column "
             r"dominates both, and in that column the PD model plays no part at all "
-            r"(Section~10.3).} \\",
+            r"(Section~10.3). The two PD columns come from the \emph{hazard} term-structure "
+            r"model, which is what drives the staged ECL; the one-year Expected Loss row is "
+            r"built from the \emph{scorecard}'s annualised PD instead, so the 12-month "
+            r"column does not multiply out to the EL total.} \\",
             r"\end{tabular}",
             r"\end{table}",
         ]
@@ -296,7 +363,7 @@ def render_latex():
         middle of a feature's bins — a points table that stops halfway through a ladder
         cannot be read as a scorecard. Showing every bin of the top few features, and
         pointing at the JSON for the rest, is both shorter and usable
-        (Flaws.md page budget).
+        (the internal review log page budget).
         """
         if not sc_rows:
             return r"\textit{No scorecard table available.}"
@@ -406,8 +473,10 @@ def render_latex():
                 "predicted_pd": pred,
                 "actual_dr": actual,
                 "pd_ratio": (pred / actual) if actual > 0 else 0.0,
-                "calibration_flag": "pass" if 0.8 <= (pred / actual if actual else 0) <= 1.25
-                                    else "warn",
+                # Flag from the production rule, not from a second copy of it. This used
+                # to hardcode [0.80, 1.25] while validation/backtest.py used [0.80, 1.20]
+                # and the surrounding prose called it a 50% band.
+                "calibration_flag": _vintage_flag((pred / actual) if actual > 0 else 0.0),
             })
         return out
 
@@ -423,7 +492,6 @@ def render_latex():
             pred_pd  = float(row.get("predicted_pd", 0))
             actual_dr = float(row.get("actual_dr", row.get("actual_default_rate", 0)))
             pd_ratio  = float(row.get("pd_ratio", 0))
-            flag      = row.get("calibration_flag", "pass")
 
             # Wilson Score 95% CI (more accurate for small n)
             if n > 0:
@@ -466,7 +534,7 @@ def render_latex():
         if not after:
             # The gate never reached the fit stage, so there is no deployed transform to
             # compare against. Say so rather than tabulating a transform that was never
-            # applied (Flaws.md finding N6).
+            # applied (FLAWS-N6).
             return (
                 r"\textit{No recalibration was fitted in this run, so no before/after "
                 r"comparison exists. Reason: "
@@ -509,7 +577,7 @@ def render_latex():
         f_expected = _toward(before.get("expected_dr", 0.0), after.get("expected_dr", 0.0), actual_dr_val)
 
         # Name any metric that regressed, so the trade-off is stated rather than left for
-        # the reader to spot in the delta column (Flaws.md finding N6).
+        # the reader to spot in the delta column (FLAWS-N6).
         _regressed = [
             label for label, flag in (
                 ("the Brier score", f_brier),
@@ -595,9 +663,11 @@ def render_latex():
         if not strategy:
             return r"\textit{No cutoff strategy data available.}"
         targets = [500, 540, 580, 620, 660, 700]
-        # The reconciled optimal cutoff (marginal RAROC-hurdle rule) must appear as
-        # an actual, highlighted row in the table.
-        opt = metrics_dict.get("cutoff_optimal_profit", {})
+        # The operating cutoff (risk-appetite rule: most inclusive score whose approved bad
+        # rate stays under the ceiling) must appear as an actual, highlighted row.
+        opt = metrics_dict.get("cutoff_risk_appetite") or metrics_dict.get(
+            "cutoff_optimal_profit", {}
+        )
         opt_cut = opt.get("cutoff")
         show = sorted({*targets, *([opt_cut] if opt_cut is not None else [])})
         rows = [row for row in strategy if row["cutoff"] in show]
@@ -1026,7 +1096,7 @@ def render_latex():
         alpha_pct = float(ec.get("alpha", 0.999)) * 100.0
         n_sim = int(ec.get("n_simulations", 0))
         # rho is either a constant or the string "supervisory" (the per-PD-bucket BCBS
-        # "Other Retail" curve), so the caption is built for either (Flaws.md N13).
+        # "Other Retail" curve), so the caption is built for either (the internal review log N13).
         _rho_raw = ec.get("rho", 0.15)
         try:
             rho_caption = f"$\\rho={float(_rho_raw):.2f}$"
@@ -1081,18 +1151,22 @@ def render_latex():
             coef = float(r.get("coef", 0.0))
             hr = float(r.get("hazard_ratio", 0.0))
             p = float(r.get("p_value", float("nan")))
+            sd = r.get("sd")
+            sd_txt = f"{float(sd):.4g}" if sd is not None and float(sd) == float(sd) else "--"
             p_txt = "$<$0.001" if p < 0.001 else f"{p:.3f}"
-            body.append(f"{label} & {coef:+.5f} & {hr:.5f} & {p_txt} \\\\")
+            body.append(f"{label} & {sd_txt} & {coef:+.5f} & {hr:.5f} & {p_txt} \\\\")
 
         return "\n".join([
             r"\begin{table}[H]",
             r"\centering",
-            r"\caption{Cox Proportional-Hazards Model --- Covariate Summary}",
+            r"\caption{Cox Proportional-Hazards Model --- Covariate Summary "
+            r"(coefficients per standard deviation)}",
             r"\label{tab:cox_summary}",
             r"\vspace{0.5em}",
-            r"\begin{tabular}{lrrr}",
+            r"\begin{tabular}{lrrrr}",
             r"\toprule",
-            r"\textbf{Covariate} & \textbf{Coef ($\beta$)} & \textbf{Hazard Ratio} & \textbf{$p$-value} \\",
+            r"\textbf{Covariate} & \textbf{SD} & \textbf{Coef ($\beta$ per SD)} & "
+            r"\textbf{Hazard Ratio} & \textbf{$p$-value} \\",
             r"\midrule",
             *body,
             r"\bottomrule",
@@ -1149,7 +1223,7 @@ def render_latex():
         return "\n".join([
             r"\begin{table}[H]",
             r"\centering",
-            f"\\caption{{ECL What-If Sensitivity (Baseline ECL $=$ \\${base:,.1f}M; note that this Baseline-only ECL reference differs from the probability-weighted total ECL in Table~\\ref{{tab:exec_summary}} as it excludes the Upside/Downside macro scenario shocks mandated by IFRS~9)}}",
+            f"\\caption{{ECL What-If Sensitivity (anchor ECL $=$ \\${base:,.1f}M at $Z=0$; this is neither the priced Baseline scenario, which carries its own non-zero implied $Z$, nor the probability-weighted total ECL of Table~\\ref{{tab:exec_summary}}, which additionally weights the Upside and Downside scenarios. Every figure below is a ratio to this same anchor, so the choice of anchor cancels)}}",
             r"\label{tab:ecl_whatif}",
             r"\vspace{0.5em}",
             r"\begin{tabular}{lrrr}",
@@ -1218,7 +1292,7 @@ def render_latex():
     ml_comparison_table_tex = _ml_comparison_table_latex(metrics.get("ml_benchmark_comparison", []))
     csi_table_tex = _csi_table_latex(metrics.get("csi_table", []))
     ecl_reconciliation_tex = _ecl_reconciliation_latex(
-        metrics.get("ecl_reconciliation") or {}, metrics.get("total_el", 0.0)
+        metrics.get("ecl_reconciliation") or {}, _num(metrics, "total_el")
     )
 
     # ── D3: ML Gini helper for benchmark table ────────────────────────────────
@@ -1230,42 +1304,48 @@ def render_latex():
     ml_rows = metrics.get("ml_benchmark_comparison", [])
 
     # ── Helper formatters ──────────────────────────────────────────────────────
+    # A missing optional metric arrives here as NaN (see _num) and must print as a visible
+    # "n/a", never as a number. Formatting NaN with "{:,.0f}" would otherwise emit the
+    # literal string "nan" into the PDF.
     def fmt_num(val, fmt="{:,.0f}"):
         try:
-            return fmt.format(float(val))
+            f = float(val)
+            return "n/a" if f != f else fmt.format(f)
         except Exception:
-            return "N/A"
+            return "n/a"
 
     def fmt_dec(val, precision=4):
         try:
-            return f"{float(val):.{precision}f}"
+            f = float(val)
+            return "n/a" if f != f else f"{f:.{precision}f}"
         except Exception:
-            return "N/A"
+            return "n/a"
 
     def fmt_pct(val, precision=2):
         try:
-            return f"{float(val) * 100:.{precision}f}\\%"
+            f = float(val)
+            return "n/a" if f != f else f"{f * 100:.{precision}f}\\%"
         except Exception:
-            return "N/A"
+            return "n/a"
 
     # ── Load metrics ───────────────────────────────────────────────────────────
-    auc = fmt_dec(metrics.get("auc", 0.6324))
-    gini = fmt_dec(metrics.get("gini", 0.2648))
-    ks = fmt_dec(metrics.get("ks", 0.2151))
-    auc_oot = fmt_dec(metrics.get("auc_oot", 0.6326))
-    gini_oot = fmt_dec(metrics.get("gini_oot", 0.2651))
-    ks_oot = fmt_dec(metrics.get("ks_oot", 0.1984))
+    auc = fmt_dec(_num(metrics, "auc"))
+    gini = fmt_dec(_num(metrics, "gini"))
+    ks = fmt_dec(_num(metrics, "ks"))
+    auc_oot = fmt_dec(_num(metrics, "auc_oot"))
+    gini_oot = fmt_dec(_num(metrics, "gini_oot"))
+    ks_oot = fmt_dec(_num(metrics, "ks_oot"))
     brier_oot = fmt_dec(metrics.get("calibration", {}).get("oot", {}).get("brier_score", 0.0582), 4)
-    mean_lgd = fmt_dec(metrics.get("mean_lgd", 0.1178))
-    downturn_lgd = fmt_dec(metrics.get("downturn_lgd", 0.1339))
+    mean_lgd = fmt_dec(_num(metrics, "mean_lgd"))
+    downturn_lgd = fmt_dec(_num(metrics, "downturn_lgd"))
     lgd_uplift_pp = fmt_dec(
-        (float(metrics.get("downturn_lgd", 0.0)) - float(metrics.get("mean_lgd", 0.0))) * 100.0,
+        (float(_num(metrics, "downturn_lgd")) - float(_num(metrics, "mean_lgd"))) * 100.0,
         precision=2,
     )
     lgd_val_n = f"{int(metrics.get('lgd_validation', {}).get('n_test', 0)):,}"
     # Interpolate the formatted values directly: nested __TOKEN__ placeholders inside a
     # substituted string would not be expanded, since the scalar replacements run first.
-    _dl = float(metrics.get("downturn_lgd", 0.0))
+    _dl = float(_num(metrics, "downturn_lgd"))
     if _dl >= 0.999:
         downturn_note = (
             "On this fully unsecured, non-revolving instalment book the realised severity of "
@@ -1288,7 +1368,7 @@ def render_latex():
     # Which model wins on OOT discrimination is an empirical result, not a premise. The
     # shipped report asserted the scorecard won and hard-coded the rivals' AUCs; once the
     # challengers were given feature parity (audit B2) the ranking changed. Everything
-    # below is therefore computed (docs/AUDIT.md finding A12).
+    # below is therefore computed (AUDIT-A12).
     _bench = metrics.get("ml_benchmark_comparison") or []
     _sc_row = next((r for r in _bench if "Scorecard" in str(r.get("model", ""))), None)
     _rivals = [r for r in _bench if r is not _sc_row]
@@ -1399,6 +1479,88 @@ def render_latex():
     else:
         stage3_ecl_share = "n/a"
     baseline_z = fmt_dec(metrics.get("macro_implied_shocks", {}).get("baseline", 0.0), 4)
+
+    # The macro tornado's percentages are computed on a total that includes the
+    # PD-independent Stage 3 term, so they understate the sensitivity of the part of the
+    # book the macro model can actually reach. Section 10.3 already infers that share for
+    # the what-if table; the same correction is applied here rather than left implicit.
+    _sens_rows = metrics.get("ecl_sensitivity") or []
+    _pd_indep_share = None
+    if _pd50 is not None:
+        _pd_indep_share = max(0.0, min(1.0, 1.0 - (float(_pd50["delta_pct"]) / 100.0) / 0.5))
+    _anchor_ecl = float(
+        next((r["total_ecl"] for r in _sens_rows
+              if float(r.get("macro_shock", 1.0)) == 0.0), 0.0)
+    )
+    if _sens_rows and _anchor_ecl > 0:
+        _span = max(
+            abs(float(r.get("total_ecl", 0.0)) / _anchor_ecl - 1.0) for r in _sens_rows
+        )
+        tornado_span = f"{_span * 100:.1f}\\%"
+        if _pd_indep_share is not None and _pd_indep_share < 0.999:
+            tornado_pd_only = (
+                f"scaled onto the PD-sensitive remainder it is "
+                f"$\\pm${_span * 100 / (1.0 - _pd_indep_share):.1f}\\%."
+            )
+        else:
+            tornado_pd_only = "the PD-sensitive share could not be inferred on this run."
+    else:
+        tornado_span = "n/a"
+        tornado_pd_only = ""
+
+    # The what-if table anchors its base_ecl at Z = 0 under a single scenario, whereas the
+    # headline ECL is probability-weighted across scenarios with staging taken at the
+    # baseline Z. The f-inference above is a ratio so the anchor cancels, but the two
+    # numbers are not the same and the difference must be stated, not left for the reader
+    # to trip over.
+    _whatif_base = float(_pd50["base_ecl"]) if _pd50 is not None else 0.0
+    _headline_ecl = float(_num(metrics, "total_ecl"))
+    if _whatif_base > 0 and _headline_ecl > 0:
+        whatif_base_note = (
+            f" The what-if base is \\${_whatif_base/1e9:,.2f}bn: a single-scenario ECL at "
+            f"$Z=0$, {abs(_whatif_base/_headline_ecl - 1.0)*100:.1f}\\% away from the "
+            f"probability-weighted headline of \\${_headline_ecl/1e9:,.2f}bn. The inference "
+            "above is a ratio of shocks to that same base, so the anchor cancels."
+        )
+    else:
+        whatif_base_note = ""
+
+    # Whether the performing-book provisions are usable at all is a property of the run,
+    # not a standing claim: a hazard model whose 12-month leg collapses produces a Stage 1
+    # provision of exactly zero, and this sentence previously asserted the opposite while
+    # the reconciliation table above it printed $0.00bn.
+    # Same derivation as the reconciliation table's own note: whether the two provisions
+    # land near each other is a run property, and the reader is told which case they are in.
+    _el_v = float(_num(metrics, "total_el"))
+    _ecl_v = float(_num(metrics, "total_ecl"))
+    _el_ecl_ratio = (_ecl_v / _el_v) if _el_v > 0 else 0.0
+    if 0.8 <= _el_ecl_ratio <= 1.25:
+        el_ecl_proximity = (
+            "They nonetheless land within a few percent of one another, which side by side "
+            "and without reconciliation reads as mutual confirmation. It is not."
+        )
+    else:
+        el_ecl_proximity = (
+            f"The ECL is {_el_ecl_ratio:.1f}$\\times$ the Expected Loss, and the gap is the "
+            "staging: a lifetime horizon on Stage~2 and $PD=1$ on Stage~3 against a flat "
+            "one-year horizon with no staging at all."
+        )
+
+    _recon_stage = (metrics.get("ecl_reconciliation") or {}).get("ecl_by_stage") or {}
+    _ecl_s1_v = float(_recon_stage.get("s1", 0.0))
+    if _ecl_s1_v > 0.0:
+        performing_book_caveat = (
+            "The Stage~1 and Stage~2 provisions, the ECL coverage ratio on the performing "
+            "book, and the macro sensitivity analysis remain meaningful as relative "
+            "comparisons"
+        )
+    else:
+        performing_book_caveat = (
+            "The Stage~1 provision is \\emph{zero} on this run --- the hazard model's "
+            "12-month leg produces no default probability inside the first twelve months, "
+            "so the entire performing book is provisioned at nil and only the Stage~2 and "
+            "macro sensitivity comparisons carry any information"
+        )
 
     # ── Phase-Gamma disclosures, all derived from metrics ──────────────────────
 
@@ -1511,7 +1673,7 @@ def render_latex():
     # The essential EAD assumption used to appear nowhere in the report. Every loan was
     # carried at a months-on-book of exactly 40% of its term, because the payment column
     # the estimator needs is stripped by the leakage filter before it ever arrives — so
-    # exposure was a deterministic function of (term, rate) alone (Flaws.md finding N10).
+    # exposure was a deterministic function of (term, rate) alone (FLAWS-N10).
     _mob_basis = metrics.get("ead_mob_basis")
     _mob_labels = {
         "elapsed_since_origination":
@@ -1533,11 +1695,14 @@ def render_latex():
     # The shipped report claimed 2016--2018 PD ratios were "consistently below 0.85"
     # directly above a table in which not one row was below 0.85 — the claim described
     # the pre-recalibration state while the table showed the post-recalibration one
-    # (Flaws.md finding N7).
+    # (FLAWS-N7).
     _bt_annual = _aggregate_backtest_to_annual(metrics.get("pd_backtest_vintage") or [])
     if _bt_annual:
-        _over = [r for r in _bt_annual if r["pd_ratio"] > 1.25]
-        _under = [r for r in _bt_annual if 0 < r["pd_ratio"] < 0.80]
+        # Band from the production constants, not a copy of them (see
+        # validation/backtest.VINTAGE_PASS_BAND).
+        _band_lo, _band_hi = VINTAGE_PASS_BAND
+        _over = [r for r in _bt_annual if r["pd_ratio"] > _band_hi]
+        _under = [r for r in _bt_annual if 0 < r["pd_ratio"] < _band_lo]
         _in_band = len(_bt_annual) - len(_over) - len(_under)
 
         def _years(rows):
@@ -1545,7 +1710,7 @@ def render_latex():
 
         _parts = [
             f"Of the {len(_bt_annual)} origination years backtested, {_in_band} sit inside "
-            "the $[0.80, 1.25]$ predicted-to-actual band"
+            f"the ${vintage_band_text()}$ predicted-to-actual band"
         ]
         if _over:
             _parts.append(
@@ -1578,7 +1743,7 @@ def render_latex():
     # ── Bootstrap AUC CI and the Spiegelhalter test ────────────────────────────
     # Both were computed by the pipeline (500 bootstrap resamples each) and never
     # rendered, leaving the headline AUC without a precision statement and the
-    # calibration section resting on Hosmer-Lemeshow alone (Flaws.md finding N38).
+    # calibration section resting on Hosmer-Lemeshow alone (FLAWS-N38).
     _oot_disc = metrics.get("discrimination", {}).get("oot", {})
     _ci_lo, _ci_hi = _oot_disc.get("auc_ci_lower"), _oot_disc.get("auc_ci_upper")
     if _ci_lo is not None and _ci_hi is not None:
@@ -1608,7 +1773,7 @@ def render_latex():
 
     # ── Provenance strings: selection funnel, Model B scope, binner, dropped phases ──
     # All four exist because the report previously described a pipeline that differed
-    # from the one that ran (Flaws.md findings N29, N36, N32, N39).
+    # from the one that ran (FLAWS-N29, N36, N32, N39).
     _stages = metrics.get("feature_selection_stages") or {}
     if _stages:
         _iv_lo, _iv_hi = (_stages.get("iv_band") or [0.02, 0.50])[:2]
@@ -1669,7 +1834,7 @@ def render_latex():
     if _n_feat_ch and _n_feat_sc and _n_feat_ch < _n_feat_sc:
         _missing = _n_feat_sc - _n_feat_ch
         # The trailing full stop belongs to the generated fragment: the static text that
-        # follows it in the template starts a new sentence (Flaws.md finding N35).
+        # follows it in the template starts a new sentence (FLAWS-N35).
         feature_parity_note = (
             f"the challengers are therefore evaluated on {_missing} predictor(s) fewer than the "
             "champion, so the comparison above understates their attainable discrimination and "
@@ -1680,30 +1845,33 @@ def render_latex():
             "the two model families are therefore evaluated on an identical predictor set, so "
             "the comparison above is like-for-like."
         )
-    total_el = fmt_num(metrics.get("total_el", 2474806))
-    total_ead = fmt_num(metrics.get("total_ead_portfolio", 326526293))
-    el_rate = fmt_pct(metrics.get("el_rate", 0.0076))
-    total_rwa = fmt_num(metrics.get("total_rwa", 67238352))
-    total_rwa_sa = fmt_num(metrics.get("total_rwa_sa", 244894720))
+    total_el = fmt_num(_num(metrics, "total_el"))
+    total_ead = fmt_num(_num(metrics, "total_ead_portfolio"))
+    el_rate = fmt_pct(_num(metrics, "el_rate"))
+    total_rwa = fmt_num(_num(metrics, "total_rwa"))
+    total_rwa_sa = fmt_num(_num(metrics, "total_rwa_sa"))
     rwa_density = str(metrics.get("rwa_density", "20.6%")).replace("%", "\\%")
-    total_ecl = fmt_num(metrics.get("total_ecl", 2428522))
-    ecl_coverage = fmt_pct(metrics.get("ecl_coverage", 0.0074), precision=3)
-    stage2_pct = fmt_pct(metrics.get("stage2_pct", 0.0))
-    stage3_pct = fmt_pct(metrics.get("stage3_pct", 0.0635))
-    # Cite the reconciled optimal cutoff (marginal RAROC-hurdle rule; traceable
-    # highlighted table row), falling back to the risk-appetite cutoff only if the
-    # profit sweep is missing.
-    _opt_profit_row = metrics.get("cutoff_optimal_profit", {})
-    opt_cutoff = fmt_dec(_opt_profit_row.get("cutoff", metrics.get("optimal_cutoff_threshold", 550.0)), precision=0)
-    opt_approval = fmt_pct(_opt_profit_row.get("approval_rate", metrics.get("optimal_approval_rate", 0.871)))
-    opt_bad = fmt_pct(_opt_profit_row.get("bad_rate", metrics.get("optimal_bad_rate", 0.0548)))
+    total_ecl = fmt_num(_num(metrics, "total_ecl"))
+    ecl_coverage = fmt_pct(_num(metrics, "ecl_coverage"), precision=3)
+    stage2_pct = fmt_pct(_num(metrics, "stage2_pct"))
+    stage3_pct = fmt_pct(_num(metrics, "stage3_pct"))
+    # Cite the operating cutoff: the risk-appetite rule (most inclusive score whose
+    # approved bad rate stays under the ceiling), traceable to a highlighted table row.
+    # It is neither a profit optimum nor a marginal-RAROC-hurdle rule, though the legacy
+    # metrics key and two comments used to say so.
+    _opt_profit_row = metrics.get("cutoff_risk_appetite") or metrics.get(
+        "cutoff_optimal_profit", {}
+    )
+    opt_cutoff = fmt_dec(_opt_profit_row.get("cutoff", _num(metrics, "optimal_cutoff_threshold")), precision=0)
+    opt_approval = fmt_pct(_opt_profit_row.get("approval_rate", _num(metrics, "optimal_approval_rate")))
+    opt_bad = fmt_pct(_opt_profit_row.get("bad_rate", _num(metrics, "optimal_bad_rate")))
     opt_profit_m = f"{_opt_profit_row.get('expected_profit', 0.0) / 1e6:,.1f}"
     opt_raroc = fmt_pct(_opt_profit_row.get("raroc", 0.0))
-    raroc_hurdle = fmt_pct(metrics.get("cutoff_raroc_hurdle", 0.15))
+    raroc_hurdle = fmt_pct(_num(metrics, "cutoff_raroc_hurdle"))
     # Data-driven hurdle comparison so the prose can never contradict the table
     # (a negative RAROC must not be described as "above" a positive hurdle).
     _opt_raroc_v = float(_opt_profit_row.get("raroc", 0.0))
-    _hurdle_v = float(metrics.get("cutoff_raroc_hurdle", 0.15))
+    _hurdle_v = float(_num(metrics, "cutoff_raroc_hurdle"))
     if _opt_raroc_v >= 1.5 * _hurdle_v:
         raroc_vs_hurdle = "comfortably above"
     elif _opt_raroc_v >= _hurdle_v:
@@ -1712,7 +1880,7 @@ def render_latex():
         raroc_vs_hurdle = "below"
     # Whether ANY cutoff on the swept grid clears the hurdle is an empirical result and
     # flips once the PD horizon feeding the P&L is corrected, so it is derived, never
-    # asserted (Flaws.md findings N2, N27).
+    # asserted (FLAWS-N2, N27).
     _grid_rows = [
         r for r in (metrics.get("cutoff_strategy_table") or [])
         if float(r.get("approval_rate", 0.0)) > 0.0
@@ -1735,62 +1903,102 @@ def render_latex():
             f"{fmt_pct(_best_clear.get('raroc', 0.0))}; the operating point trades some of "
             "that return for the risk-appetite ceiling on the approved bad rate."
         )
-    max_bad_rate_txt = fmt_pct(metrics.get("cutoff_max_bad_rate", 0.15))
+    max_bad_rate_txt = fmt_pct(_num(metrics, "cutoff_max_bad_rate"))
     # The charge netted out of expected profit is the cost of capital, NOT the RAROC
     # hurdle (the hurdle is only the threshold the resulting RAROC is compared against).
-    cost_of_capital_txt = fmt_pct(metrics.get("cutoff_cost_of_capital", 0.12))
+    cost_of_capital_txt = fmt_pct(_num(metrics, "cutoff_cost_of_capital"))
     _corner_row = metrics.get("cutoff_raroc_max") or metrics.get("cutoff_profit_argmax", {})
     corner_raroc = fmt_pct(_corner_row.get("raroc", 0.0))
     corner_cutoff = fmt_dec(_corner_row.get("cutoff", 0.0), precision=0)
     # Which corner the unconstrained optimum actually sits at is data-dependent: on a book
     # where every grid RAROC is negative the argmax is the MOST EXCLUSIVE non-empty cutoff,
     # not full approval. Derive the wording instead of asserting it.
+    #
+    # Every clause below is derived. An earlier version hard-coded "every cutoff on the
+    # 400--800 grid returns a negative RAROC" and "the profit-maximising and
+    # RAROC-maximising cutoff coincide" inside the exclusive-corner branch. Both were false
+    # on a run whose grid RAROCs were all positive and whose two argmaxes sat at 400 and
+    # 610 — and both sentences were printed beside the numbers that contradicted them.
     _corner_approval_v = float(_corner_row.get("approval_rate", 0.0))
     corner_approval = fmt_pct(_corner_approval_v, precision=3)
+    _profit_argmax_row = metrics.get("cutoff_profit_argmax") or {}
+    _raroc_max_row = metrics.get("cutoff_raroc_max") or {}
+    _argmaxes_coincide = bool(_profit_argmax_row) and bool(_raroc_max_row) and (
+        int(_profit_argmax_row.get("cutoff", -1)) == int(_raroc_max_row.get("cutoff", -2))
+    )
+    corner_agreement = (
+        "the unconstrained profit-maximising \\emph{and} RAROC-maximising cutoff coincide at"
+        if _argmaxes_coincide else
+        "the unconstrained RAROC-maximising cutoff sits at"
+    )
+    _n_negative = sum(1 for r in _grid_rows if float(r.get("raroc", 0.0)) < 0.0)
+    if _grid_rows and _n_negative == len(_grid_rows):
+        _corner_reason = (
+            " --- every cutoff on the 400--800 grid returns a negative RAROC, so the argmax "
+            "is simply the smallest, best-quality approved book rather than a genuinely "
+            "profitable operating point"
+        )
+    else:
+        _corner_reason = (
+            " --- RAROC is a ratio to economic capital, so it is maximised by the smallest, "
+            "best-quality approved book regardless of whether that book is worth writing; "
+            f"the profit argmax sits instead at cutoff \\textbf{{{fmt_dec(_profit_argmax_row.get('cutoff', 0.0), precision=0)}}} "
+            f"(approving \\textbf{{{fmt_pct(float(_profit_argmax_row.get('approval_rate', 0.0)))}}})"
+        )
     if _corner_approval_v >= 0.99:
         corner_desc = (
-            "approving essentially the entire through-the-door population --- because "
-            "higher-risk grades carry interest rates high enough to remain RAROC-accretive "
-            "even after loss and capital costs"
+            "approving essentially the entire through-the-door population at a portfolio "
+            f"RAROC of \\textbf{{{corner_raroc}}} --- because higher-risk grades carry "
+            "interest rates high enough to remain RAROC-accretive even after loss and "
+            "capital costs"
         )
         corner_implication = "unconstrained optimisation therefore implies near-total approval"
     else:
         corner_desc = (
             f"the most \\emph{{exclusive}} non-empty cutoff on the grid (score "
             f"\\textbf{{{corner_cutoff}}}, approving only \\textbf{{{corner_approval}}} of the "
-            "population) --- every cutoff on the 400--800 grid returns a negative RAROC, so the "
-            "argmax is simply the smallest, best-quality approved book rather than a "
-            "genuinely profitable operating point"
+            f"population at a RAROC of \\textbf{{{corner_raroc}}}){_corner_reason}"
         )
         corner_implication = (
             "unconstrained optimisation therefore collapses to a vacuous near-zero-volume corner"
         )
-    gini_ttd = fmt_dec(metrics.get("gini_ttd", 0.2086))
+
+    # The implication clause has to answer for BOTH corners, not just the RAROC one. When
+    # the profit argmax is near-total approval the book is not "vacuous" at all — it is
+    # large and written at an unacceptable bad rate, which is a different reason to
+    # constrain the problem and the one the risk-appetite rule actually responds to.
+    _profit_approval_v = float(_profit_argmax_row.get("approval_rate", 0.0))
+    if not _argmaxes_coincide and _profit_approval_v >= 0.99:
+        corner_implication = (
+            "neither unconstrained optimum is an operating point (one approves almost "
+            "nobody; the other approves almost everybody, at an approved bad rate of "
+            f"\\textbf{{{fmt_pct(float(_profit_argmax_row.get('bad_rate', 0.0)))}}})"
+        )
+    gini_ttd = fmt_dec(_num(metrics, "gini_ttd"))
     gini_shift = fmt_dec(metrics.get("gini_shift", -0.0555))
-    stress_el = fmt_num(metrics.get("stress_el", 8985195))
-    stress_rwa = fmt_num(metrics.get("stress_rwa", 95903062))
-    stress_capital_req = fmt_num(metrics.get("stress_capital_req", 7672245))
-    stress_el_ratio = fmt_pct(metrics.get("stress_el", 8985195) / metrics.get("total_el", 2474806) - 1.0, precision=1)
-    stress_rwa_ratio = fmt_pct(metrics.get("stress_rwa", 95903062) / metrics.get("total_rwa", 67238352) - 1.0, precision=1)
+    stress_el = fmt_num(_num(metrics, "stress_el"))
+    stress_rwa = fmt_num(_num(metrics, "stress_rwa"))
+    stress_capital_req = fmt_num(_num(metrics, "stress_capital_req"))
+    stress_el_ratio = fmt_pct(_num(metrics, "stress_el") / _num(metrics, "total_el") - 1.0, precision=1)
+    stress_rwa_ratio = fmt_pct(_num(metrics, "stress_rwa") / _num(metrics, "total_rwa") - 1.0, precision=1)
     stress_cap_ratio = fmt_pct(
-        metrics.get("stress_capital_req", 7672245) / (metrics.get("total_rwa", 67238352) * 0.08) - 1.0, precision=1
+        _num(metrics, "stress_capital_req") / (_num(metrics, "total_rwa") * 0.08) - 1.0, precision=1
     )
     today_str = os.environ.get("REPORT_DATE") or date.today().strftime("%d %B %Y")
-    rwa_release_cap = fmt_num((metrics.get("total_rwa_sa", 0) - metrics.get("total_rwa", 0)) * 0.08)
-    base_cap_req = fmt_num(metrics.get("total_rwa", 0) * 0.08)
-    base_cap_req_sa = fmt_num(metrics.get("total_rwa_sa", 0) * 0.08)
-    rwa_release_cap_abs = fmt_num(abs((metrics.get("total_rwa_sa", 0) - metrics.get("total_rwa", 0)) * 0.08))
+    rwa_release_cap = fmt_num((_num(metrics, "total_rwa_sa") - _num(metrics, "total_rwa")) * 0.08)
+    base_cap_req = fmt_num(_num(metrics, "total_rwa") * 0.08)
+    base_cap_req_sa = fmt_num(_num(metrics, "total_rwa_sa") * 0.08)
+    rwa_release_cap_abs = fmt_num(abs((_num(metrics, "total_rwa_sa") - _num(metrics, "total_rwa")) * 0.08))
     hl_pvalue = fmt_dec(metrics.get("calibration", {}).get("oot", {}).get("hl_pvalue", 0.1656), 4)
-    hl_pvalue_test = fmt_dec(metrics.get("calibration", {}).get("test", {}).get("hl_pvalue", 0.0), 4)
     psi_train_oot = fmt_dec(metrics.get("stability", {}).get("psi_train_oot", 0.0005), 4)
 
     # ── Population counts: every count in the prose is derived, never hard-coded ──
-    _n_train_v = int(metrics.get("n_train", 0))
-    _n_test_v = int(metrics.get("n_test", 0))
-    _n_oot_v = int(metrics.get("n_oot", 0))
+    _n_train_v = int(_num(metrics, "n_train"))
+    _n_test_v = int(_num(metrics, "n_test"))
+    _n_oot_v = int(_num(metrics, "n_oot"))
     _n_model_v = _n_train_v + _n_test_v + _n_oot_v or 1
-    _n_file_v = int(metrics.get("n_accepted_file", 0))
-    _n_resolved_v = int(metrics.get("n_resolved_outcome", metrics.get("n_accepted_raw", 0)))
+    _n_file_v = int(_num(metrics, "n_accepted_file"))
+    _n_resolved_v = int(metrics.get("n_resolved_outcome", _num(metrics, "n_accepted_raw")))
     n_accepted_file = f"{_n_file_v:,}"
     n_resolved_outcome = f"{_n_resolved_v:,}"
     n_rejected_raw = f"{int(metrics.get('n_rejected_raw', 0)):,}"
@@ -1799,8 +2007,8 @@ def render_latex():
     pct_train = fmt_pct(_n_train_v / _n_model_v)
     pct_test = fmt_pct(_n_test_v / _n_model_v)
     pct_oot = fmt_pct(_n_oot_v / _n_model_v)
-    train_bad_rate = fmt_pct(metrics.get("train_bad_rate", 0.0))
-    train_good_rate = fmt_pct(1.0 - float(metrics.get("train_bad_rate", 0.0)))
+    train_bad_rate = fmt_pct(_num(metrics, "train_bad_rate"))
+    train_good_rate = fmt_pct(1.0 - float(_num(metrics, "train_bad_rate")))
     oot_bad_rate = fmt_pct(
         metrics.get("calibration_comparison", {}).get("before", {}).get("actual_dr", 0.0)
     )
@@ -1808,7 +2016,7 @@ def render_latex():
     # ── Recalibration: what the out-of-time gate decided ────────────────────────
     # The gate triggers on out-of-time evidence, fits on the earlier half of the OOT
     # window and accepts only on demonstrated improvement in the later half. The prose
-    # below reports whichever branch actually fired (docs/AUDIT.md finding A1).
+    # below reports whichever branch actually fired (AUDIT-A1).
     _gate = metrics.get("calibration", {}).get("recalibration_gate", {}) or {}
     _applied = bool(metrics.get("calibration", {}).get("recalibration_applied", False))
     _n_fit = f"{int(_gate.get('n_fit', 0)):,}"
@@ -1822,7 +2030,7 @@ def render_latex():
     _EM_A, _EM_B = "\\emph{", "}"
     # Print the real date boundaries of the two slices. Stating only the counts is what
     # allowed a positional split to read as a chronological one for an entire audit round
-    # (Flaws.md finding N3).
+    # (FLAWS-N3).
     if _gate.get("fit_slice_min_date") and _gate.get("eval_slice_max_date"):
         _slice_span = (
             f" (fitting slice {_gate['fit_slice_min_date']} to "
@@ -1850,6 +2058,37 @@ def render_latex():
         "comfortably --- while fitting on the evaluation slice would trivially pass "
         "Hosmer-Lemeshow as an in-sample artefact. This design avoids both failure modes."
     )
+
+    # The transform is attached only to the vintages the gate learned from (2016+), so
+    # everything older keeps raw model PDs. This was recorded in a log line and nowhere
+    # else, while the paragraph below asserted flatly that the PDs feeding EL, RWA and
+    # staging are recalibrated -- leaving an undisclosed level discontinuity at the 2016
+    # boundary for a large minority of the book.
+    _cal_min_year = metrics.get("calibration_min_issue_year")
+    _oos_ead = metrics.get("calibration_out_of_scope_ead_share")
+    _oos_loans = metrics.get("calibration_out_of_scope_loan_share")
+    if _cal_min_year:
+        # Both shares, because they tell different stories: the untouched vintages are a
+        # large minority of the book by loan count but a small share of exposure, since
+        # EAD amortises to the reporting date and those loans are the oldest.
+        if _oos_ead is not None and _oos_loans is not None:
+            _scope_extent = (
+                f" --- \\textbf{{{fmt_pct(_oos_loans, precision=1)}}} of loans, though only "
+                f"\\textbf{{{fmt_pct(_oos_ead, precision=2)}}} of exposure by EAD, since EAD "
+                "amortises to the reporting date and these are the oldest vintages ---"
+            )
+        else:
+            _scope_extent = ""
+        _scope_clause = (
+            f", but only for vintages originated in \\textbf{{{int(_cal_min_year)}}} or "
+            f"later, which is the era the gate learned from. Earlier vintages{_scope_extent} "
+            "keep their raw model PD, so the deployed PD level steps at the "
+            f"{int(_cal_min_year)} boundary"
+        )
+        _scope_short = f" for {int(_cal_min_year)}+ vintages only"
+    else:
+        _scope_clause = ""
+        _scope_short = ""
 
     if not _gate:
         recalib_status = _gate_intro
@@ -1889,14 +2128,15 @@ def render_latex():
             f"{_eb.get('brier', float('nan')):.4f} to "
             f"{_ea.get('brier', float('nan')):.4f}. The transform " + _EM_A + "is" +
             _EM_B + " attached to the production scorecard, so the PDs feeding Expected "
-            "Loss, Basel RWA and IFRS~9 staging are recalibrated. Because every one of "
+            "Loss, Basel RWA and IFRS~9 staging are recalibrated" + _scope_clause +
+            ". Because every one of "
             "those improvements is measured on vintages excluded from the fit, this is "
             "an out-of-sample result rather than an in-sample artefact."
         )
         recalib_production_note = (
             f"corrected in production by the {_method} transform that the out-of-time "
             "gate accepted (Section~7.2), applied to the scorecard's 12-month PD feeding "
-            "Expected Loss, Basel RWA and SICR staging"
+            f"Expected Loss, Basel RWA and SICR staging{_scope_short}"
         )
     else:
         recalib_status = (
@@ -1961,7 +2201,7 @@ def render_latex():
 \titleformat{\section}{\Large\bfseries\scshape}{\thesection}{0.8em}{}[\vspace{-0.4em}\rule{\linewidth}{0.4pt}]
 \titleformat{\subsection}{\normalsize\bfseries\scshape}{\thesubsection}{0.8em}{}
 % Tighter float separation - 44 floats x ~20pt of default padding is the
-% largest remaining block of recoverable whitespace (Flaws.md page budget).
+% largest remaining block of recoverable whitespace (the internal review log page budget).
 \setlength{\abovedisplayskip}{4pt plus 2pt minus 2pt}
 \setlength{\belowdisplayskip}{4pt plus 2pt minus 2pt}
 \setlength{\abovedisplayshortskip}{2pt}
@@ -2099,7 +2339,7 @@ The primary underwriting and historical performance data is derived from Lending
 To ensure methodological correctness, loans with ambiguous or immature repayment statuses are excluded from the modeling population. Specifically, loans marked as \textit{``Current''}, \textit{``In Grace Period''}, or \textit{``Late (16--30 days)''} are removed since their ultimate credit outcome is unresolved. The remaining loans represent the underwriting and model development population.
 
 \subsection{Target Definition (PD)}
-A binary default indicator ($Y$) is defined on each loan's \emph{terminal resolved status} at the 2018Q4 snapshot, taken directly from the pipeline configuration:
+A binary default indicator ($Y$) is defined on each loan's \emph{resolved status} at the 2018Q4 snapshot, taken directly from the pipeline configuration (``resolved'' rather than ``terminal'': as set out below, one member of the bad set is a current delinquency state, not a final outcome):
 \begin{equation}
 Y =
 \begin{cases}
@@ -2133,7 +2373,7 @@ Vintage analysis tracks the cumulative default curves of origination cohorts (qu
 \label{fig:vintage_curves}
 \end{figure}
 
-Figure~\ref{fig:eda_target_grade} displays additional exploratory distributions, demonstrating the relationship between historical default rates and risk grades, amortization terms, and loan purposes. Figure~\ref{fig:eda_dist_missing} completes the exploratory picture with the marginal distributions of the key numeric predictors and the missingness profile of the raw feature set; the treatment applied to those missing values is described in Section~3.1.
+Figure~\ref{fig:eda_target_grade} displays additional exploratory distributions, demonstrating the relationship between historical default rates and risk grades, amortization terms, and loan purposes. Figure~\ref{fig:eda_dist_missing} completes the exploratory picture with the marginal distributions of the key numeric predictors and the missingness profile of the \emph{modelling} feature set --- that is, after the leakage deny-list has been applied in the loader, not the raw file. The distinction matters: the columns with the highest missingness in the raw LendingClub extract are the post-origination hardship and settlement blocks, which the deny-list removes before this figure is drawn, so describing it as the raw profile (as this passage previously did) points the reader at a different set of columns from the one plotted. The treatment applied to the remaining missing values is described in Section~3.1.
 
 \begin{figure}[H]
 \centering
@@ -2298,7 +2538,7 @@ The production PD term structure (Section~6) is a discrete-time hazard model. As
 \label{fig:km_survival}
 \end{figure}
 
-Table~\ref{tab:cox_summary} reports the fitted Cox coefficients, hazard ratios $\exp(\beta)$ and Wald $p$-values. A hazard ratio above $1$ raises the instantaneous default hazard; below $1$ lowers it. The dominant hazard multipliers attach to credit grade and interest rate, while debt-to-income and amortisation term enter with smaller but individually significant positive coefficients (all values as tabulated below); each covariate therefore raises the default hazard monotonically as it increases, consistent with the scorecard's risk ordering.
+Table~\ref{tab:cox_summary} reports the fitted Cox coefficients, hazard ratios $\exp(\beta)$ and Wald $p$-values. A hazard ratio above $1$ raises the instantaneous default hazard; below $1$ lowers it. The model is fitted on \textbf{standardised} covariates, so each hazard ratio is the effect of a one-standard-deviation move in that covariate and the ratios are directly comparable with each other; the covariate's standard deviation is tabulated alongside so a natural-unit effect can be recovered. This matters because the ridge penalty acts on the raw coefficients: fitted on unstandardised inputs it penalised a covariate measured as a $0.05$--$0.35$ fraction (the interest rate) far more heavily than one measured on a $1$--$7$ integer scale (the grade index), which made the reported multipliers incomparable and shrank the rate effect almost to nothing. __COX_DOMINANT__ Each covariate raises the default hazard monotonically as it increases, consistent with the scorecard's risk ordering.
 
 __COX_TABLE__
 
@@ -2515,7 +2755,7 @@ The lifetime PD $1 - S(H)$ used directly in the equation above is produced by th
 __LIFETIME_PD_CALIBRATION_TABLE__
 
 \subsection{Forward-Looking Macroeconomic Scenarios}
-To ensure ECL provisions are forward-looking and compliant with IFRS 9, we implement an Ordinary Least Squares (OLS) macroeconomic regression with imposed economic sign priors, supported by the ADF, Granger-causality and Johansen time-series diagnostics reported in Section~6.3. This framework dynamically links quarterly historical default rates of the LendingClub portfolio to key US macroeconomic indicators, sourced live from the official FRED (St.\ Louis Fed) API: the Unemployment Rate (UNRATE), GDP Growth (GDP\_growth), the Federal Funds Rate (FEDFUNDS), CPI Inflation (CPI\_inflation), and House Price Index Growth (HPI\_growth, from the seasonally-adjusted Case-Shiller US National HPI), a collateral-value indicator via which rising home prices support household wealth and reduce default risk.
+To ensure ECL provisions are forward-looking and compliant with IFRS 9, we implement an Ordinary Least Squares (OLS) macroeconomic regression with imposed economic sign priors, supported by the ADF, Granger-causality and Johansen time-series diagnostics reported in Section~6.3. This framework dynamically links quarterly historical default rates of the LendingClub portfolio to key US macroeconomic indicators, __MACRO_SOURCE__: the Unemployment Rate (UNRATE), real GDP growth (GDP\_growth, from GDPC1 --- \emph{real}, not nominal, so that inflation does not enter the regression twice alongside CPI), the Federal Funds Rate (FEDFUNDS), CPI Inflation (CPI\_inflation), and House Price Index Growth (HPI\_growth, from the seasonally-adjusted Case-Shiller US National HPI), a collateral-value indicator via which rising home prices support household wealth and reduce default risk.
 
 The OLS model determines the sensitivity (elasticity) of the portfolio default rate to each economic factor. These sensitivities are used to predict default rates under three standardized economic scenarios (Baseline, Upside, and Downside). The macro-predicted default rates are then mathematically mapped to systematic credit cycle shocks (Vasicek $Z$-shocks) using the supervisory retail correlation parameter ($\rho = 0.15$):
 \begin{equation}
@@ -2528,7 +2768,7 @@ where $\text{TTC\_DR}$ is the long-run average (Through-the-Cycle) default rate,
 h'_t = 1 - (1 - h_t)^{\alpha}, \qquad
 \alpha = \frac{-\ln\!\big(1 - \Phi(\tfrac{\Phi^{-1}(1-S) - \sqrt{\rho} Z}{\sqrt{1-\rho}})\big)}{-\ln S},
 \end{equation}
-which reproduces the targeted lifetime PD exactly, since $S^{\alpha} = e^{-\alpha \ln(1/S)}$. The lifetime horizon is the only workable anchor here: the hazard model is fitted on a panel that places every default in the loan's final month (Section~10), so the twelve-month cumulative hazard is negligible and anchoring the scaling there would leave $\alpha \equiv 1$ and disable the macro overlay entirely.
+which reproduces the targeted lifetime PD exactly, since $S^{\alpha} = e^{-\alpha \ln(1/S)}$. The lifetime horizon is the correct anchor because it is the horizon $Z$ is calibrated on: the Vasicek inversion in \texttt{risk/ifrs9\_ecl.py} takes its through-the-cycle default rate from the modelling target, which is the loan's terminal resolved status and therefore a \emph{lifetime} rate. Anchoring the transform at twelve months would apply a lifetime-calibrated $Z$ to a twelve-month probability, which is a different quantity.
 
 $\rho = 0.15$ here is the supervisory retail correlation used for the scenario mapping specifically; the Basel IRB capital calculation of Section~5.1 uses the PD-dependent ``Other Retail'' curve $R \in [0.03, 0.16]$, and the Monte Carlo economic capital of Section~5.4 uses that same curve.
 
@@ -2584,7 +2824,7 @@ Model validation is performed on the completely held-out Out-of-Time (OOT) datas
 \end{figure}
 
 \subsection{Calibration Robustness}
-Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{__HL_PVALUE__}} < 0.05$). Given the very large sample size ($N = \text{VAR_N_OOT}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. __SPIEGELHALTER_NOTE__ __RECALIB_STATUS__ __RECALIB_RESIDUAL_NOTE__
+Calibration was evaluated by comparing predicted default rates against actual observed default rates across risk deciles. The Hosmer-Lemeshow test \parencite{hosmer2013} rejects perfect calibration on the OOT dataset ($p = \text{\textbf{__HL_PVALUE__}} < 0.05$). Given the very large sample size ($N = \text{VAR_N_OOT}$), this result partly reflects the high sensitivity of the chi-squared goodness-of-fit test, but the calibration plots also indicate systematic underprediction at higher risk deciles. __HL_SUBSAMPLE_NOTE__ __SPIEGELHALTER_NOTE__ __RECALIB_STATUS__ __RECALIB_RESIDUAL_NOTE__
 
 __CALIBRATION_COMPARISON_TABLE__
 
@@ -2609,11 +2849,11 @@ __CALIBRATION_COMPARISON_TABLE__
 
 \subsection{Backtesting and Vintage Calibration}
 
-Model backtesting compares the scorecard's predicted average PD against observed default rates segmented by quarterly origination vintage, following the methodology of \parencite{eba2017} and \parencite{bcbs2005}. For each vintage cohort, we assess whether the predicted mean PD lies within a \textbf{50\% tolerance band} of the realised default frequency:
+Model backtesting compares the scorecard's predicted average PD against observed default rates segmented by quarterly origination vintage, following the methodology of \parencite{eba2017} and \parencite{bcbs2005}. For each vintage cohort, we assess whether the predicted mean PD lies within the tolerance band __VINTAGE_BAND__ of the realised default frequency:
 \begin{equation}
 \text{PD Ratio}_{v} = \frac{\bar{p}_v}{\bar{d}_v}
 \end{equation}
-where $\bar{p}_v$ is the cohort-average predicted PD and $\bar{d}_v$ is the realised default rate. A ratio between 0.5 and 1.5 indicates acceptable calibration. Cohorts outside this band are flagged for recalibration ($\dagger$). Table~\ref{tab:pd_backtest} reports the backtesting results by origination year, exposure-weighted across that year's quarters; the ratios below are \textbf{post-recalibration}, i.e.\ they describe the PDs the pipeline actually deploys, not raw model output.
+where $\bar{p}_v$ is the cohort-average predicted PD and $\bar{d}_v$ is the realised default rate. A ratio inside __VINTAGE_BAND__ indicates acceptable calibration; cohorts outside it are flagged for recalibration ($\dagger$). That band, the flag in the table below and the count in the next paragraph all come from one constant in \texttt{validation/backtest.py} --- this passage previously described a 50\% band, counted vintages against $[0.80, 1.25]$, and was implemented twice with a third pair of thresholds. Table~\ref{tab:pd_backtest} reports the backtesting results by origination year, exposure-weighted across that year's quarters. The ratios below describe the PDs the pipeline actually deploys rather than raw model output --- which for in-scope vintages means \textbf{post-recalibration}. __RECALIB_SCOPE_CAVEAT__
 
 __VINTAGE_DRIFT_SENTENCE__ The hazard model's \textbf{lifetime} PD that drives IFRS~9 ECL directly ($\text{ECL} = \sum_t m(t)\times\text{LGD}(t)\times\text{EAD}(t)/(1+\text{EIR})^t$) is a separate estimator and is \emph{not} passed through this scorecard recalibration; it is instead independently validated against realised lifetime default rates by vintage in Table~\ref{tab:lifetime_pd_calibration} (Section~6.2).
 
@@ -2657,8 +2897,10 @@ An earlier version of this report presented such a reconstructed matrix. Its cel
 
 Figure~\ref{fig:ecl_tornado} presents the portfolio ECL sensitivity to the Vasicek systematic factor~$Z$ across a range of macro scenarios, from severe expansion ($Z = +2.0$) to severe recession ($Z = -2.0$). This analysis follows the probability-weighted scenario methodology mandated by IFRS~9 paragraph B5.5.42 \parencite{iasb2014} and the stress testing framework of \parencite{bellini2019}.
 
+Two things about the scale of those percentages. The reference row is $Z = 0$, the \emph{unconditional} anchor --- not the priced Baseline scenario, which carries its own non-zero implied $Z$ of \textbf{__BASELINE_Z__}, and not the probability-weighted headline provision. And the denominator is the whole ECL, which is dominated by the Stage~3 term where $PD$ is forced to $1.0$ and no macro factor can reach it (Section~10.3 measures that share at \textbf{__STAGE3_ECL_SHARE__} of the provision). A $\pm$__TORNADO_SPAN__ swing on the total therefore corresponds to a materially larger swing on the PD-sensitive part of the book: __TORNADO_PD_ONLY__ Read the tornado as a sensitivity of the reported provision, not of the modelled credit risk.
+
 \subsection{ECL What-If Calculator: PD / LGD / EAD Stress Scenarios}
-Beyond the macro-factor mapping, a management-facing what-if calculator answers the direct risk-committee question \emph{``what happens to provisions if PD, LGD or EAD move?''}. Holding the baseline term structure fixed, each scenario applies a multiplicative PD shock, an additive LGD shock and/or a multiplicative EAD (drawdown) shock, and the ECL engine is re-run. Table~\ref{tab:ecl_whatif} reports the resulting provision changes, and Figure~\ref{fig:ecl_shock_tornado} presents them as a tornado chart, including regulator-style severe scenarios calibrated to COVID-19 and Global-Financial-Crisis default multiples. Note that the baseline-only ECL used as the anchor for these what-if sensitivities excludes the macro scenario probability-weights (downside recession and upside expansion shocks), which explains why it is slightly lower than the final reported probability-weighted ECL.
+Beyond the macro-factor mapping, a management-facing what-if calculator answers the direct risk-committee question \emph{``what happens to provisions if PD, LGD or EAD move?''}. Holding the baseline term structure fixed, each scenario applies a multiplicative PD shock, an additive LGD shock and/or a multiplicative EAD (drawdown) shock, and the ECL engine is re-run. Table~\ref{tab:ecl_whatif} reports the resulting provision changes, and Figure~\ref{fig:ecl_shock_tornado} presents them as a tornado chart, including regulator-style severe scenarios calibrated to COVID-19 and Global-Financial-Crisis default multiples. The anchor for these what-if sensitivities is the ECL evaluated at $Z = 0$: neither the priced Baseline scenario, which carries its own non-zero implied $Z$, nor the probability-weighted total, which additionally weights the downside and upside scenarios. That is why it differs from the headline ECL. Every entry in the table is a ratio to that same anchor, so the choice cancels.
 
 __ECL_WHATIF_TABLE__
 
@@ -2734,7 +2976,7 @@ __ML_COMPARISON_TABLE__
 Notably, __ML_VERDICT__ \textbf{Feature parity.} The scorecard consumes __N_FEATURES_SC__ selected predictors and the tree challengers consume __N_FEATURES_CH__; __FEATURE_PARITY_NOTE__ It should be noted that the challenger models (LightGBM, XGBoost, Random Forest) were trained using standard, default configurations without systematic hyperparameter grid search tuning. Hyperparameter optimisation would, if anything, widen any challenger advantage, so the ranking above should be read as a lower bound on what tuned tree models could achieve on this feature set.
 
 \subsubsection*{Is the Challenger's Edge Statistically Significant?}
-Point-estimate AUC/Gini gaps cannot distinguish a genuine improvement from sampling noise. To test significance we run a paired bootstrap: the same held-out OOT rows are resampled for both models and a confidence interval is built on the \emph{difference} in Gini (challenger $-$ champion). If that interval excludes zero, the difference is significant. Table~\ref{tab:ab_test} reports the result --- __AB_DIRECTION__ It complements the analytic DeLong test on the same pair.
+Point-estimate AUC/Gini gaps cannot distinguish a genuine improvement from sampling noise. To test significance we run a paired bootstrap: the same held-out OOT rows are resampled for both models and a confidence interval is built on the \emph{difference} in Gini (challenger $-$ champion). If that interval excludes zero, the difference is significant. Table~\ref{tab:ab_test} reports the result --- __AB_DIRECTION__ It complements the analytic DeLong test on the same pair, which is computed with the full covariance term of \textcite{delong1988}: both models score the same loans, so their AUC estimates are strongly positively correlated (__DELONG_CORR__ on this run) and $\mathrm{Var}(\widehat{A}_1 - \widehat{A}_2) = \mathrm{Var}(\widehat{A}_1) + \mathrm{Var}(\widehat{A}_2) - 2\,\mathrm{Cov}(\widehat{A}_1, \widehat{A}_2)$. Dropping that covariance --- as an independent-samples approximation does --- inflates the standard error and makes the test conservative by a wide margin. __ENSEMBLE_AB_NOTE__
 
 __AB_TEST_TABLE__
 
@@ -2795,7 +3037,7 @@ The Gains Chart measures the model's ability to concentrate defaults within the 
 % -----------------------------------------------------------------------------
 \section{Business Decisioning and Cutoff Optimisation}
 
-Underwriting decisions require balancing credit risk, portfolio growth, and capital constraints. We evaluate each score cutoff on Expected Profit and Risk-Adjusted Return on Capital (RAROC), with expected loss (at the approved-population bad rate) and a __COST_OF_CAPITAL__ cost-of-capital charge on economic capital both netted out. On this portfolio the unconstrained profit-maximising \emph{and} RAROC-maximising cutoff coincide at __CORNER_DESC__, at a portfolio RAROC of \textbf{__CORNER_RAROC__}. Because __CORNER_IMPLICATION__, the decision problem is formulated as a \emph{constrained} optimization: we maximize approved volume and expected profit subject to an active risk-appetite ceiling on the approved bad rate (\textbf{__MAX_BAD_RATE__}), taking the most inclusive cutoff (maximising approved profit) whose approved bad rate stays within that ceiling. This constrained boundary represents the recommended operating cutoff.
+Underwriting decisions require balancing credit risk, portfolio growth, and capital constraints. We evaluate each score cutoff on Expected Profit and Risk-Adjusted Return on Capital (RAROC), with expected loss (at the approved-population bad rate) and a __COST_OF_CAPITAL__ cost-of-capital charge on economic capital both netted out. On this portfolio __CORNER_AGREEMENT__ __CORNER_DESC__. Because __CORNER_IMPLICATION__, the decision problem is formulated as a \emph{constrained} optimization: we maximize approved volume and expected profit subject to an active risk-appetite ceiling on the approved bad rate (\textbf{__MAX_BAD_RATE__}), taking the most inclusive cutoff (maximising approved profit) whose approved bad rate stays within that ceiling. This constrained boundary represents the recommended operating cutoff.
 
 We sweep score cutoffs from 400 to 800 (evaluating approved loan subsets) to calculate Expected Profit and RAROC. All components are expressed on a consistent \emph{per-annum} basis:
 \begin{itemize}
@@ -2827,16 +3069,16 @@ As shown in the table, the recommended operating cutoff is score \textbf{__OPT_C
 The Lending Club dataset is limited to US consumer loans and may not generalize to corporate lending, small-business loans, or other international retail portfolios. Additionally, the dataset excludes collateral details, meaning the LGD model relies primarily on underwriting grades and debt-to-income (DTI) metrics.
 
 \subsection{Reconciling Expected Loss with IFRS~9 ECL}
-The report carries two headline provisions that land within a few percent of one another --- the one-year Expected Loss of Section~5.2 and the IFRS~9 ECL of Section~6 --- despite being defined over different horizons, with different staging, and with different discounting. Presented side by side without reconciliation, that proximity reads as mutual confirmation. It is not. Table~\ref{tab:el_ecl_reconciliation} decomposes both by stage, which makes the actual driver visible.
+The report carries two headline provisions --- the one-year Expected Loss of Section~5.2 and the IFRS~9 ECL of Section~6 --- defined over different horizons, with different staging, and with different discounting. __EL_ECL_PROXIMITY__ Table~\ref{tab:el_ecl_reconciliation} decomposes both by stage, which makes the actual driver visible.
 
 __ECL_RECONCILIATION_TABLE__
 
 \subsection{Stage 3 Is a Hindsight Classification, and It Dominates the ECL}
 The single most material limitation of this engine concerns \emph{what the headline ECL figure actually measures}. IFRS~9 Stage~3 (credit-impaired) is normally identified by observed non-performance --- 90+ days past due at the reporting date. The LendingClub accepted-loan file is loan-level with no monthly delinquency panel, so no such observation exists. The implementation therefore classifies Stage~3 from the loan's \emph{terminal resolved status} --- the same variable used as the PD modelling target. Stage~3 membership is consequently known only with hindsight, and each Stage~3 loan is provisioned at $\text{LGD}\times\text{EAD}$ with PD forced to $1.0$, a quantity entirely insensitive to the PD model.
 
-The what-if calculator in Section~7.6 makes the resulting dominance measurable. Shocking LGD by $+10$pp moves the total ECL by __WHATIF_LGD_PCT__ and shocking EAD by $+15\%$ moves it by __WHATIF_EAD_PCT__ --- both exactly proportional, as they must be, since ECL is linear in each. But shocking PD by $+50\%$ moves it by only __WHATIF_PD50_PCT__. If a fraction $f$ of the ECL sits in the PD-independent Stage~3 term, a $+50\%$ PD shock produces a change of $0.5\,(1-f)$; the observed sensitivity therefore implies $f \approx$ __STAGE3_ECL_SHARE__ of the reported provision.
+The what-if calculator in Section~7.6 makes the resulting dominance measurable. Shocking LGD by $+10$pp moves the total ECL by __WHATIF_LGD_PCT__ and shocking EAD by $+15\%$ moves it by __WHATIF_EAD_PCT__ --- both exactly proportional, as they must be, since ECL is linear in each. But shocking PD by $+50\%$ moves it by only __WHATIF_PD50_PCT__. If a fraction $f$ of the ECL sits in the PD-independent Stage~3 term, a $+50\%$ PD shock produces a change of $0.5\,(1-f)$; the observed sensitivity therefore implies $f \approx$ __STAGE3_ECL_SHARE__ of the reported provision.__WHATIF_BASE_NOTE__
 
-In other words, the headline ECL is, to first order, \emph{realised defaults} $\times$ \emph{LGD} $\times$ \emph{EAD} --- an accounting identity computed with knowledge of the outcome --- and every forward-looking component of the engine (the macro regression, the Vasicek $Z$-shocks, the probability-weighted scenarios and the hazard term structure) moves only the residual. The Stage~1 and Stage~2 provisions, the ECL coverage ratio on the performing book, and the macro sensitivity analysis remain meaningful as relative comparisons; the absolute headline provision should not be read as a forward-looking estimate of losses on an unresolved portfolio. A production deployment on a live book, where Stage~3 is set by observed delinquency at the reporting date rather than by terminal outcome, would not have this property.
+In other words, the headline ECL is, to first order, \emph{realised defaults} $\times$ \emph{LGD} $\times$ \emph{EAD} --- an accounting identity computed with knowledge of the outcome --- and every forward-looking component of the engine (the macro regression, the Vasicek $Z$-shocks, the probability-weighted scenarios and the hazard term structure) moves only the residual. __PERFORMING_BOOK_CAVEAT__; the absolute headline provision should not be read as a forward-looking estimate of losses on an unresolved portfolio. A production deployment on a live book, where Stage~3 is set by observed delinquency at the reporting date rather than by terminal outcome, would not have this property.
 
 \subsection{Known Model Assumptions and Limitations}
 This single list carries every model assumption and its associated limitation; it replaces the separate assumptions table that previously restated several of these items in shorter form.
@@ -2851,8 +3093,11 @@ This single list carries every model assumption and its associated limitation; i
     \item \textbf{No origination-date PD snapshot --- relative SICR trigger disabled:} IFRS~9's primary SICR test compares the current lifetime PD against the PD estimated \emph{at booking}. This dataset stores no booking-date model output, so no such snapshot exists. Rather than substitute the current PD for the origination PD --- which makes the ratio identically $1.0$ and silently disables the test while appearing to implement it --- the relative trigger is switched off and Stage~2 is driven by the absolute lifetime-PD threshold and the delinquency backstop alone. Reinstating it requires storing PD at booking, which is listed under Recommended Next Steps below.
     \item \textbf{Delinquency backstop is an application-time proxy:} The implemented backstop is \texttt{delinq\_2yrs} $\geq 1$ --- delinquencies in the two years \emph{before} origination --- not the IFRS~9 standard 30+ DPD at the reporting date, which this data cannot support.
     \item \textbf{Downturn LGD sits at the distribution cap:} The Basel downturn LGD is the 90th percentile of the \emph{realised} severity of loss-incurring defaults, which on this fully unsecured, non-revolving book is __DOWNTURN_LGD__ --- the upper bound of the $[0,1]$ range. It is a genuine empirical percentile rather than a modelled stress, and it cannot be exceeded, so the capital calculation carries no headroom above it for a severity worse than total loss.
-    \item \textbf{Hazard-model event timing:} The discrete-time hazard model is fitted on a person-period panel in which every default event is placed in the loan's \emph{final} month, because the data records no observed default date, and no censoring is applied. The estimated months-on-book slope is therefore partly an artefact of this construction, and that term structure is what drives the ECL sum.
+    \item \textbf{Hazard-model event timing is a proxy:} The data records no observed default \emph{date}, so the discrete-time hazard panel is built against a duration proxy --- cumulative payments divided by the contractual instalment --- and right-censors survivors at the month their payments stop. This is the same proxy the Kaplan-Meier/Cox challenger in Section~3.7 uses. It replaces an earlier construction that gave every loan its full contractual term of person-periods with the event pinned to the final one and no censoring; that version fitted a 12-month hazard of essentially zero, which provisioned the entire Stage~1 book at nil. The remaining limitation is that the duration is inferred, not observed, and that prepayment is treated as censoring rather than as a competing risk --- so a borrower who repays early is treated as having survived to that point rather than as having left the risk pool for a different reason.
     \item \textbf{Portfolio aggregates are partly in-sample:} Expected Loss, Basel RWA and IFRS~9 ECL are computed over the combined train, in-time test and OOT partitions --- the same rows the scorecard, hazard and LGD models were fitted on. This is appropriate for provisioning a closed book but means the portfolio aggregates are not out-of-sample quantities; the out-of-sample evidence is the OOT discrimination and calibration in Section~7.
+    \item \textbf{The out-of-time sample is selected on maturity, not drawn at random:} the modelling population keeps only loans whose status is resolved at the 2018Q4 snapshot, so 2016--2018 originations that were still \emph{Current} are excluded. Among recent vintages the loans that have already resolved are disproportionately those that ended early --- that is, the charged-off ones --- and 60-month loans are under-represented relative to 36-month ones. The effect is visible in the composition of the window: half the OOT observations come from the eleven months to \textbf{2016-11} and the other half from the following twenty-five, over a period when origination volume was rising. Every OOT statistic in Section~7 (AUC, KS, PSI, Hosmer-Lemeshow, and the recalibration gate that keys off them) inherits this selection.
+    \item \textbf{Exposure is booked on loans that no longer exist:} EAD amortises each loan contractually to the \textbf{__REPORTING_DATE__} reporting date from its origination month, but a large part of the book had already been repaid in full or charged off years before that date, and their true exposure at the reporting date is zero. Stage~3 in particular ($\text{EAD} =$ __STAGE3_EAD__) consists by construction of loans whose terminal status is already known. The zero-prepayment assumption noted above covers early repayment \emph{within} a live loan; it does not cover provisioning against exposures that had already terminated. The engine should be read as pricing this book as if observed at origination-plus-elapsed-term, not as a snapshot of a live portfolio.
+    \item \textbf{The macro apparatus is fitted on the training window only:} the OLS default-rate regression, the scenario projections, the implied Vasicek $Z$ shocks, the ADF / Granger / Johansen diagnostics and the PiT--TTC decomposition are all estimated on the \emph{training} vintages (2007--2014), four years before the reporting date, and then applied to the whole book. Nothing in the 2016--2018 era informs the macro sensitivities that drive the forward-looking part of the ECL.
     \item \textbf{Constant exposure inside the ECL sum:} $\text{LGD}(t)$ and $\text{EAD}(t)$ are held at their per-loan point estimates across the ECL horizon rather than re-amortised monthly, which is conservative for amortising loans.
     \item \textbf{The adverse scenario is a rate-and-inflation shock, not a lower-bound recession:} Every macro axis moves in the direction its imposed sign prior says raises defaults (downside) or lowers them (upside), so the required Downside $>$ Baseline $>$ Upside ordering holds \emph{by construction} for any non-negative coefficient magnitudes rather than depending on the fitted values. The consequence is that the downside tightens policy and raises inflation into the downturn. This is a deliberate choice: it is the more punitive configuration for an unsecured consumer book, where floating debt-service costs and a real-income squeeze compound the unemployment shock, and it matches how supervisory adverse scenarios are typically built. A deflationary lower-bound recession, in which policy is cut, would instead \emph{offset} part of the adverse shock through the rate channel and is not modelled here.
     \item \textbf{The ``baseline'' scenario maps to $Z = $ __BASELINE_Z__, not $Z=0$:} This is a property of the Vasicek conditional-PD function, whose value at $Z=0$ does not equal the unconditional PD; the projection intercept is recentred so the baseline reproduces the through-the-cycle default rate. Under the report-wide convention that $Z<0$ is adverse, the baseline therefore reads as mildly adverse even though it is the central expectation.
@@ -2971,10 +3216,10 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__VINTAGE_DRIFT_SENTENCE__", vintage_drift_sentence)
     latex_content = latex_content.replace("__EAD_MOB_ASSUMPTION__", ead_mob_assumption)
     latex_content = latex_content.replace(
-        "__MEAN_PD_LIFETIME__", fmt_pct(metrics.get("mean_pd_lifetime", 0.0))
+        "__MEAN_PD_LIFETIME__", fmt_pct(_num(metrics, "mean_pd_lifetime"))
     )
     latex_content = latex_content.replace(
-        "__MEAN_PD_12M__", fmt_pct(metrics.get("mean_pd_12m", 0.0))
+        "__MEAN_PD_12M__", fmt_pct(_num(metrics, "mean_pd_12m"))
     )
     latex_content = latex_content.replace("__HAZARD_DISCRIMINATION__", hazard_discrimination_note)
     latex_content = latex_content.replace("__EC_RHO_NOTE__", ec_rho_note)
@@ -3017,6 +3262,7 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__GRID_HURDLE_VERDICT__", grid_hurdle_verdict)
     latex_content = latex_content.replace("__MAX_BAD_RATE__", max_bad_rate_txt)
     latex_content = latex_content.replace("__CORNER_RAROC__", corner_raroc)
+    latex_content = latex_content.replace("__CORNER_AGREEMENT__", corner_agreement)
     latex_content = latex_content.replace("__CORNER_DESC__", corner_desc)
     latex_content = latex_content.replace("__CORNER_IMPLICATION__", corner_implication)
     latex_content = latex_content.replace("__COST_OF_CAPITAL__", cost_of_capital_txt)
@@ -3054,7 +3300,20 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__WHATIF_EAD_PCT__", whatif_ead_pct)
     latex_content = latex_content.replace("__WHATIF_PD50_PCT__", whatif_pd50_pct)
     latex_content = latex_content.replace("__STAGE3_ECL_SHARE__", stage3_ecl_share)
+    latex_content = latex_content.replace("__WHATIF_BASE_NOTE__", whatif_base_note)
+    latex_content = latex_content.replace("__EL_ECL_PROXIMITY__", el_ecl_proximity)
+    latex_content = latex_content.replace(
+        "__PERFORMING_BOOK_CAVEAT__", performing_book_caveat
+    )
     latex_content = latex_content.replace("__BASELINE_Z__", baseline_z)
+    latex_content = latex_content.replace("__VINTAGE_BAND__", f"${vintage_band_text()}$")
+    _scope_caveat = (
+        f"Rows before {int(_cal_min_year)} are outside the recalibrator's vintage scope "
+        "(Section~7.2) and are therefore raw model output; the two halves of the table are "
+        "not the same estimator."
+        if _cal_min_year else ""
+    )
+    latex_content = latex_content.replace("__RECALIB_SCOPE_CAVEAT__", _scope_caveat)
     latex_content = latex_content.replace("__ML_VERDICT__", ml_verdict)
     latex_content = latex_content.replace("__CHAMPION_RATIONALE__", champion_rationale)
     latex_content = latex_content.replace("__CEILING_NOTE__", ceiling_note)
@@ -3085,6 +3344,123 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__MACRO_ELASTICITIES_TABLE__", _macro_elasticities_table_latex(metrics))
     latex_content = latex_content.replace("__RISK_MEASURES_TABLE__", _risk_measures_table_latex(metrics))
     latex_content = latex_content.replace("__COX_TABLE__", _cox_table_latex(metrics))
+
+    # Which covariates actually dominate is read off the fitted per-SD coefficients rather
+    # than asserted. The previous sentence named "credit grade and interest rate" as the
+    # dominant multipliers while the fitted rate effect was ~1% of hazard across its whole
+    # observed range -- an artefact of penalising unstandardised covariates.
+    _cox_rows = (metrics.get("survival") or {}).get("cox_summary") or []
+    _cox_labels = {
+        "grade_num": "credit grade", "int_rate": "interest rate",
+        "dti": "debt-to-income", "term_num": "amortisation term",
+    }
+    if _cox_rows:
+        _ranked = sorted(
+            _cox_rows, key=lambda r: abs(float(r.get("coef", 0.0))), reverse=True
+        )
+        _top = [_cox_labels.get(str(r.get("covariate")), str(r.get("covariate")))
+                for r in _ranked[:2]]
+        _weakest = _cox_labels.get(
+            str(_ranked[-1].get("covariate")), str(_ranked[-1].get("covariate"))
+        )
+        cox_dominant = (
+            f"On this run the largest per-SD effects attach to {_top[0]}"
+            + (f" and {_top[1]}" if len(_top) > 1 else "")
+            + f", and the smallest to {_weakest} "
+            f"(hazard ratio {float(_ranked[-1].get('hazard_ratio', float('nan'))):.4f} "
+            "per standard deviation)."
+        )
+    else:
+        cox_dominant = ""
+    latex_content = latex_content.replace("__COX_DOMINANT__", cox_dominant)
+
+    _delong = (metrics.get("challenger") or {}).get("delong_test") or {}
+    _corr = _delong.get("auc_correlation")
+    latex_content = latex_content.replace(
+        "__DELONG_CORR__",
+        f"$\\rho = {float(_corr):.3f}$" if _corr is not None else "a correlation the test now measures rather than assumes away",
+    )
+
+    # The report's champion/challenger sentence is about the Weighted Ensemble, so the
+    # significance test has to be run against the ensemble -- it used to be run against
+    # LightGBM, leaving the one comparison the prose names entirely untested. The ensemble
+    # also contains 30% of the champion at fixed, unoptimised weights, which is stated.
+    _ens_ab = metrics.get("ab_test_ensemble") or {}
+    _ens_w = metrics.get("ensemble_weights") or {}
+    if _ens_ab:
+        _sig = bool(_ens_ab.get("significant"))
+        _diff = _ens_ab.get("diff") or {}
+        _lo, _hi = _diff.get("lo"), _diff.get("hi")
+        _ci = (
+            f" (95\\% CI on the Gini difference: [{float(_lo):+.4f}, {float(_hi):+.4f}])"
+            if _lo is not None and _hi is not None else ""
+        )
+        _w_sc = _ens_w.get("scorecard")
+        _w_txt = (
+            f" Note also that the ensemble is not an independent model: {float(_w_sc)*100:.0f}\\% "
+            "of its prediction is the champion scorecard itself, at weights fixed a priori "
+            "rather than optimised."
+            if _w_sc is not None else ""
+        )
+        ensemble_ab_note = (
+            "The same paired bootstrap is run for the \\emph{Weighted Ensemble}, which is "
+            "the row the champion-versus-challenger discussion in Section~3.6 refers to: "
+            "its Gini advantage over the scorecard is "
+            + ("statistically significant" if _sig else "\\emph{not} statistically significant")
+            + _ci + "." + _w_txt
+        )
+    else:
+        ensemble_ab_note = ""
+    latex_content = latex_content.replace("__ENSEMBLE_AB_NOTE__", ensemble_ab_note)
+    latex_content = latex_content.replace(
+        "__REPORTING_DATE__", tex_escape(str(metrics.get("reporting_date", "2018-12-31")))
+    )
+    _s3_ead = ((metrics.get("ecl_reconciliation") or {}).get("ead_by_stage") or {}).get("s3")
+    latex_content = latex_content.replace(
+        "__STAGE3_EAD__",
+        f"\\${float(_s3_ead)/1e9:,.2f}bn" if _s3_ead else "the credit-impaired exposure",
+    )
+    # The HL statistic is evaluated on a subsample (it rejects on any trivial departure at
+    # this n), and the recalibration gate keys off its p-value. Saying so, with the spread
+    # across replicates, is the difference between a disclosed approximation and a
+    # production decision resting invisibly on one draw of 5,000 rows.
+    _hl_oot = ((metrics.get("calibration") or {}).get("oot") or {})
+    _hl_reps = _hl_oot.get("hl_n_replicates") or _hl_oot.get("n_replicates")
+    _hl_n_eval = _hl_oot.get("hl_n_evaluated") or _hl_oot.get("n_evaluated")
+    if _hl_reps and _hl_n_eval:
+        _lo = _hl_oot.get("hl_pvalue_min", _hl_oot.get("p_value_min"))
+        _hi = _hl_oot.get("hl_pvalue_max", _hl_oot.get("p_value_max"))
+        _spread = (
+            f", and across those replicates the $p$-value ranges from {float(_lo):.4f} to "
+            f"{float(_hi):.4f}"
+            if _lo is not None and _hi is not None else ""
+        )
+        hl_subsample_note = (
+            f"The statistic itself is computed on subsamples of {int(_hl_n_eval):,} rows "
+            f"rather than the full slice --- at this $N$ it rejects on any trivial "
+            f"departure --- and is reported as the median over {int(_hl_reps)} independent "
+            f"draws{_spread}. The recalibration gate below keys off that median, so the "
+            "decision does not rest on a single draw."
+        )
+    else:
+        hl_subsample_note = ""
+    latex_content = latex_content.replace("__HL_SUBSAMPLE_NOTE__", hl_subsample_note)
+
+    # Which macro path actually ran. The claim "sourced live from the official FRED API"
+    # was unconditional, but without FRED_API_KEY the loader silently falls back to a
+    # hardcoded offline table that is not the same data.
+    _macro_src = str(metrics.get("macro_source", "unknown"))
+    _macro_src_txt = {
+        "live": r"sourced live from the official FRED (St.\ Louis Fed) API",
+        "offline": (
+            r"taken from the repository's bundled offline historical table --- the live "
+            r"FRED download did not run on this build, so these series are \emph{not} the "
+            r"live API data"
+        ),
+    }.get(_macro_src, r"sourced from FRED (St.\ Louis Fed); the provenance marker for this build was not recorded")
+    latex_content = latex_content.replace("__MACRO_SOURCE__", _macro_src_txt)
+    latex_content = latex_content.replace("__TORNADO_SPAN__", tornado_span)
+    latex_content = latex_content.replace("__TORNADO_PD_ONLY__", tornado_pd_only)
     _cox_cindex = metrics.get("survival", {}).get("c_index", float("nan"))
     _cox_cindex_txt = f"{_cox_cindex:.4f}" if isinstance(_cox_cindex, (int, float)) and _cox_cindex == _cox_cindex else "n/a"
     latex_content = latex_content.replace("__COX_CINDEX__", _cox_cindex_txt)
@@ -3104,7 +3480,7 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     # LightGBM challenger vs scorecard OOT AUC
     lgbm_auc_oot_str = f"{metrics.get('challenger', {}).get('auc_oot', 0.6943):.4f}"
     latex_content = latex_content.replace("VAR_LGBM_AUC_OOT", lgbm_auc_oot_str)
-    latex_content = latex_content.replace("VAR_AUC_OOT", fmt_dec(metrics.get("auc_oot", 0.6897)))
+    latex_content = latex_content.replace("VAR_AUC_OOT", fmt_dec(_num(metrics, "auc_oot")))
     # Pure-underwriting (Model B) OOT AUC — same source as the underwriting comparison table
     latex_content = latex_content.replace(
         "VAR_MODELB_AUC_OOT",
@@ -3124,7 +3500,7 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     latex_content = latex_content.replace("__ML_COMPARISON_TABLE__", ml_comparison_table_tex)
     # The stage migration matrix is no longer rendered: without a servicing panel the
     # t-12 state can only be a re-labelling of the reporting-date state, so the table
-    # was an artefact of its own reconstruction (Flaws.md finding N9).
+    # was an artefact of its own reconstruction (FLAWS-N9).
 
     # ── Benchmark ranges + verdicts (Tables 13 & 18) ─────────────────────────────
     # Single source of truth: reports/benchmarks.py. The published range cell AND the
@@ -3185,8 +3561,8 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     _bench_tokens.append(("__LGD_R2_SHORT__", f"{_lgd_r2_v:.2f}" if _lgd_r2_v is not None else "N/A"))
 
     # IRB-vs-SA is a direction check (not a numeric range); handled explicitly.
-    _rwa_irb = float(metrics.get("total_rwa", 0.0) or 0.0)
-    _rwa_sa = float(metrics.get("total_rwa_sa", 0.0) or 0.0)
+    _rwa_irb = float(_num(metrics, "total_rwa") or 0.0)
+    _rwa_sa = float(_num(metrics, "total_rwa_sa") or 0.0)
     if _rwa_irb > 0 and _rwa_sa > 0:
         if _rwa_irb > _rwa_sa:
             _irb_sa_dir, v_irbsa = "IRB $>$ SA", "Consistent"
@@ -3219,23 +3595,23 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     )
     latex_content = latex_content.replace(
         "VAR_GINI_OOT",
-        fmt_dec(metrics.get("gini_oot", 0)),
+        fmt_dec(_num(metrics, "gini_oot")),
     )
     latex_content = latex_content.replace(
         "VAR_AUC_OOT",
-        fmt_dec(metrics.get("auc_oot", 0)),
+        fmt_dec(_num(metrics, "auc_oot")),
     )
     latex_content = latex_content.replace(
         "VAR_MEAN_LGD",
-        fmt_dec(metrics.get("mean_lgd", 0)),
+        fmt_dec(_num(metrics, "mean_lgd")),
     )
     latex_content = latex_content.replace(
         "VAR_DOWNTURN_LGD",
-        fmt_dec(metrics.get("downturn_lgd", 0)),
+        fmt_dec(_num(metrics, "downturn_lgd")),
     )
     latex_content = latex_content.replace(
         "VAR_RWA_IRB",
-        fmt_num(metrics.get("total_rwa", 0)),
+        fmt_num(_num(metrics, "total_rwa")),
     )
     latex_content = latex_content.replace(
         "VAR_RWA_DENSITY",
@@ -3243,11 +3619,11 @@ PDF Generation & XeLaTeX + biber & Publication-quality academic PDF \\
     )
     latex_content = latex_content.replace(
         "VAR_ECL_TOTAL",
-        fmt_num(metrics.get("total_ecl", 0)),
+        fmt_num(_num(metrics, "total_ecl")),
     )
     latex_content = latex_content.replace(
         "VAR_ECL_COVERAGE",
-        fmt_pct(metrics.get("ecl_coverage", 0), precision=3),
+        fmt_pct(_num(metrics, "ecl_coverage"), precision=3),
     )
 
     # ── D3: Literature benchmark substitutions ────────────────────────────────

@@ -1,4 +1,4 @@
-"""Regression tests for the defects recorded in docs/AUDIT.md.
+"""Regression tests for the defects recorded in the internal audit log.
 
 Each test pins a behaviour that was previously wrong. See the audit document for the
 evidence and impact of each finding.

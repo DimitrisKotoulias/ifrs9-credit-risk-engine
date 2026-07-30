@@ -62,6 +62,8 @@ def test_run_pit_ttc_dict_shape():
         "default_rate": np.linspace(0.02, 0.08, 12),
     })
     out = run_pit_ttc(df, rho=0.15)
-    assert set(out) == {"ttc_pd", "rho", "quarters", "default_rates", "z_factors"}
+    assert {"ttc_pd", "rho", "quarters", "default_rates", "z_factors"} <= set(out)
+    # No n_loans column here, so the TTC anchor falls back to the unweighted mean.
+    assert out["ttc_weighted"] is False
     assert len(out["z_factors"]) == 12
     assert len(out["quarters"]) == 12

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Importing the package installs the optbinning/sklearn compatibility shim. The tests
 # deliberately do NOT patch anything themselves: a test-only patch would let the suite
-# pass against a production path that is broken (Flaws.md finding N22).
+# pass against a production path that is broken (FLAWS-N22).
 import credit_risk  # noqa: F401
 import numpy as np
 import pandas as pd
@@ -56,6 +56,22 @@ def small_accepted(rng: np.random.Generator) -> pd.DataFrame:
     issue_d = pd.to_datetime("2010-01-01") + pd.to_timedelta(days, unit="D")
     issue_d_str = issue_d.strftime("%b-%Y")
 
+    # Payment history. Without these columns `compute_realised_lgd` runs with
+    # total_rec_prncp = 0 — so the principal-basis denominator that is the whole point of
+    # that module is never exercised — and every months-on-book estimate falls back to
+    # `term * 0.4`. Since the hazard model's person-period panel is now built from exactly
+    # this duration proxy, a fixture without them silently tests the uncensored fallback
+    # instead of the production path. Defaulters stop paying mid-term; survivors run on.
+    installment = funded_amnt * int_rate / 12 / (1 - (1 + int_rate / 12) ** (-term))
+    mob_obs = np.where(is_bad, rng.integers(6, 25, n).astype(float), term.astype(float))
+    mob_obs = np.minimum(mob_obs, term)
+    total_pymnt = installment * mob_obs
+    # Charged-off loans repay only part of the principal before defaulting.
+    principal_share = np.where(is_bad, rng.uniform(0.15, 0.75, n), 1.0)
+    total_rec_prncp = funded_amnt * principal_share
+    last_pymnt_d = (issue_d + pd.to_timedelta((mob_obs * 30.44).astype(int), unit="D")
+                    ).strftime("%b-%Y")
+
     return pd.DataFrame(
         {
             "loan_amnt": funded_amnt,
@@ -79,13 +95,20 @@ def small_accepted(rng: np.random.Generator) -> pd.DataFrame:
             "dti": dti,
             "delinq_2yrs": rng.integers(0, 4, n).astype(float),
             "open_acc": rng.integers(3, 25, n).astype(float),
+            # Source of the `revol_util_x_new_acc` interaction. Without it the scorecard's
+            # interaction step is a no-op in tests, so the train/serve skew that silently
+            # neutralised that feature in production could not be reproduced.
+            "acc_open_past_24mths": rng.integers(0, 12, n).astype(float),
             "pub_rec": rng.integers(0, 3, n).astype(float),
             "revol_util": np.clip(rng.normal(50, 25, n), 0, 100),
             "total_acc": rng.integers(5, 50, n).astype(float),
             "recoveries": recoveries,
             "issue_d": issue_d_str,
             "loan_status": status,
-            "installment": funded_amnt * int_rate / 12 / (1 - (1 + int_rate / 12) ** (-term)),
+            "installment": installment,
+            "total_pymnt": total_pymnt,
+            "total_rec_prncp": total_rec_prncp,
+            "last_pymnt_d": last_pymnt_d,
             "fico_range_low": np.clip(rng.normal(690, 50, n), 580, 850).astype(int),
             "fico_range_high": np.clip(rng.normal(694, 50, n), 584, 854).astype(int),
             "earliest_cr_line": rng.choice(

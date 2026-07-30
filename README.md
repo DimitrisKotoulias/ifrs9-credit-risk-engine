@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
 End-to-end credit risk pipeline implementing a PD scorecard (WoE + logistic
 regression), LGD & EAD models, Basel IRB capital, and an IFRS 9 three-stage ECL
@@ -28,13 +28,13 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 | PSI (train → OOT) | 0.003 |
 | Mean LGD (OOS-selected model) | 0.893 |
 | Downturn LGD (p90) | 1.000 |
-| Portfolio EL | $279.69m |
+| Portfolio EL | $279.37m |
 | Total RWA (IRB) | $6.03bn |
-| RWA density | 161.8% |
-| Total IFRS 9 ECL | $1.21bn |
-| ECL coverage | 32.4% |
-| Stage 2 / Stage 3 share | 29.7% / 21.5% |
-| Operating cut-off | score 530 (64.4% approval, 14.2% bad rate, RAROC 58.8%) |
+| RWA density | 161.7% |
+| Total IFRS 9 ECL | $1.35bn |
+| ECL coverage | 36.2% |
+| Stage 2 / Stage 3 share | 30.0% / 21.5% |
+| Operating cut-off | score 530 (64.3% approval, 14.2% bad rate, RAROC 19.2%) |
 <!-- METRICS:END -->
 
 > The recommended operating cutoff is the most inclusive score that keeps the
@@ -84,13 +84,13 @@ regenerate: `python -m credit_risk.pipeline`, then `make readme` (or
 <tr>
 <td width="50%">
 
-**Portfolio loss distribution** — VaR 99.9% $716.80m, ES $776.89m
+**Portfolio loss distribution** — VaR 99.9% $715.53m, ES $776.69m
 <img src="reports/figures/loss_distribution.png" alt="Portfolio loss distribution Monte Carlo ASRF Vasicek">
 
 </td>
 <td width="50%">
 
-**IFRS 9 ECL sensitivity to macro shocks** — ±2 Z-factor vs $1.21bn baseline
+**IFRS 9 ECL sensitivity to macro shocks** — ±2 Z-factor vs $1.35bn baseline
 <img src="reports/figures/ecl_tornado.png" alt="ECL portfolio sensitivity to macroeconomic shocks">
 
 </td>
@@ -189,8 +189,12 @@ All parameters live in `config/config.yaml`.  Key switches:
   deny-list in `config.yaml`. See `src/credit_risk/data/leakage.py`.
 - **OOT split:** train on vintages before 2015-01-01; OOT on vintages from 2016-01-01.
   No random-date splitting — this mirrors bank model-governance practice.
-- **PD horizon:** the scorecard's target is the loan's *terminal resolved status*, so its
-  direct output is a **lifetime** PD. Basel IRB, the per-annum P&L and the stress test all
+- **PD horizon:** the scorecard's target is the loan's *resolved status* — mostly terminal
+  (`Fully Paid`, `Charged Off`, `Default`), but the bad set also includes
+  `Late (31-120 days)`, which is a point-in-time delinquency state rather than a terminal
+  outcome, so a minority of "bad" labels are snapshots rather than final resolutions
+  (`config.yaml: target.bad_statuses`; the report states this in §2.2). Treating the output
+  as a **lifetime** PD is therefore an approximation for that subset. Basel IRB, the per-annum P&L and the stress test all
   require a **one-year** PD, so it is converted at the point of use via
   `pd_12m = 1 - (1 - pd_lifetime)^(12/term)`. The lifetime figure is kept where its horizon
   is the right one: IFRS 9 staging and lifetime ECL.
@@ -201,7 +205,18 @@ All parameters live in `config/config.yaml`.  Key switches:
 - **Economic capital:** Monte Carlo ASRF on the *same* supervisory correlation curve as the
   IRB figure it is compared against; a flat ρ=0.15 run is reported alongside as a
   correlation sensitivity.
-- **IFRS 9 ECL:** 3-stage model with SICR (2.5× PD uplift + 30 DPD backstop), discrete
-  hazard term structure, discounted at effective interest rate, probability-weighted across
-  baseline / upside / downside macro scenarios.
+- **IFRS 9 ECL:** 3-stage model, discrete hazard term structure, discounted at the effective
+  interest rate, probability-weighted across baseline / upside / downside macro scenarios.
+- **SICR triggers — what is and is not evaluable here:** the absolute lifetime-PD threshold
+  (20%) applies. The *relative* trigger (current vs origination-date PD) is switched off:
+  this data stores no booking-date model output, and substituting the current PD would make
+  the ratio identically 1.0 while appearing to implement the test. The delinquency backstop
+  is `delinq_2yrs >= 1` — bureau delinquencies in the two years *before* origination — not
+  the IFRS 9 standard 30+ DPD at the reporting date, which needs a monthly servicing panel
+  this dataset does not have. Stage 3 is likewise taken from terminal resolved status, so it
+  is a hindsight classification. All three are set out in the report's limitations section.
+- **Hazard term structure — event timing:** no observed default *date* exists, so the
+  person-period panel uses a duration proxy (cumulative payments ÷ contractual instalment)
+  and right-censors survivors at the month their payments stop. Prepayment is treated as
+  censoring rather than as a competing risk.
 

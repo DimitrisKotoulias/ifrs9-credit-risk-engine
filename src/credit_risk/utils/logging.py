@@ -1,7 +1,6 @@
 """Centralised logging configuration for the credit_risk package."""
 
 import sys, logging
-from pathlib import Path
 
 
 def setup_logging(level: int = logging.INFO) -> None:

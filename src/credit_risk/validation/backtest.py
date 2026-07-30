@@ -24,6 +24,35 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# ── Vintage backtest tolerance band: the single source of truth ─────────────────
+#
+# There were four. The report's equation and text described a "50% tolerance band"
+# ([0.50, 1.50]); the very next paragraph counted vintages against [0.80, 1.25]; this
+# production flag used [0.80, 1.20] with an amber zone of [0.60, 1.50]; and
+# render_latex.py carried a second, independent implementation of the same flag on
+# [0.80, 1.25]. Two implementations of one rule with different thresholds, and three
+# different descriptions of it in prose. Everything now derives from these constants,
+# including the wording, so the numbers in the text cannot drift from the flag again.
+VINTAGE_PASS_BAND = (0.80, 1.25)
+VINTAGE_AMBER_BAND = (0.60, 1.50)
+
+
+def vintage_calibration_flag(ratio: float) -> str:
+    """pass / amber / fail for a predicted-to-actual PD ratio."""
+    lo, hi = VINTAGE_PASS_BAND
+    if lo <= ratio <= hi:
+        return "pass"
+    lo_a, hi_a = VINTAGE_AMBER_BAND
+    if lo_a <= ratio <= hi_a:
+        return "amber"
+    return "fail"
+
+
+def vintage_band_text() -> str:
+    """The pass band as it should be written in the report, e.g. ``[0.80, 1.25]``."""
+    lo, hi = VINTAGE_PASS_BAND
+    return f"[{lo:.2f}, {hi:.2f}]"
+
 
 def vintage_pd_accuracy(
     df: pd.DataFrame,
@@ -59,12 +88,7 @@ def vintage_pd_accuracy(
         # Perfect zero prediction with zero actual defaults: treat as pass
         if row["predicted_pd"] == 0.0 and row["actual_dr"] == 0.0:
             return "pass"
-        ratio = row["pd_ratio"]
-        if 0.80 <= ratio <= 1.20:
-            return "pass"
-        elif 0.60 <= ratio <= 1.50:
-            return "amber"
-        return "fail"
+        return vintage_calibration_flag(row["pd_ratio"])
     result["calibration_flag"] = result.apply(_flag, axis=1)
     # Also add actual_default_rate alias to prevent 0.0000 bug in Latex row rendering:
     result["actual_default_rate"] = result["actual_dr"]
@@ -80,6 +104,9 @@ def score_band_stability_heatmap(
     fig_dir: Path = Path("reports/figures"),
 ) -> pd.DataFrame:
     """Generate score-band population heatmap (train vs OOT).
+
+    Retained for ad-hoc use; not called by the pipeline and the figure is not referenced
+    by the report.
 
     Useful for identifying score-band-level distribution shifts beyond
     aggregate PSI, per BCBS Working Paper 14 guidance.

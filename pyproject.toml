@@ -19,7 +19,7 @@ dependencies = [
     "statsmodels>=0.14",
     "lightgbm>=4.0",
     # Required by models/pd_challenger.py; without it the challenger benchmark table
-    # disappears from the report with only a non-fatal warning (Flaws.md finding N14).
+    # disappears from the report with only a non-fatal warning (FLAWS-N14).
     "xgboost>=2.0",
     "optbinning>=0.19",
     "lifelines>=0.27",
@@ -34,24 +34,30 @@ dependencies = [
     "pydantic-settings>=2.1",
     # Data
     "kaggle>=1.5",
-    # Quality
+    # HTTP + .env, used by data/download_macro.py to pull the FRED series. These were
+    # pinned in requirements.txt but missing here, so a `pip install -e .` produced an
+    # environment where the live macro path could not run and silently fell back to the
+    # bundled offline table.
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Toolchain, not runtime. ruff/mypy/pytest/pre-commit were declared as runtime
+# dependencies, so every install of the package pulled the whole test and lint toolchain,
+# while `[dev]` held only notebook extras.
+dev = [
     "ruff>=0.4",
-    "black>=24.0",
     "mypy>=1.5",
     "pre-commit>=3.5",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "ipykernel",
+    "jupyterlab",
 ]
-
-[project.optional-dependencies]
-dev = ["ipykernel", "jupyterlab"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.black]
-line-length = 100
-target-version = ["py311"]
 
 [tool.ruff]
 line-length = 100

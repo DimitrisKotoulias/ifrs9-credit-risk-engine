@@ -1,9 +1,17 @@
 """Partial Dependence (PDP) and Individual Conditional Expectation (ICE) plots.
 
-SHAP reports *which* features matter; PDP/ICE show *how* a feature moves the prediction --
-essential for regulatory model documentation. Partial dependence is computed directly from
-the challenger's ``predict_proba`` (a plain probability callable), which sidesteps the
-scikit-learn estimator protocol that a raw LightGBM ``Booster`` does not satisfy.
+SHAP reports *which* features matter; PDP/ICE show *how* a feature moves the prediction.
+
+NOT WIRED INTO THE PIPELINE. This module is kept for ad-hoc interrogation of a fitted
+challenger; `pipeline.py` stopped producing `pdp_grid.png` / `ice_plot.png` because the
+report never referenced them, and it does not call anything here. The docstring used to
+call these plots "essential for regulatory model documentation", which is not a claim a
+module can make about itself while the regulatory documentation in question contains
+neither figure.
+
+Partial dependence is computed directly from the challenger's ``predict_proba`` (a plain
+probability callable), which sidesteps the scikit-learn estimator protocol that a raw
+LightGBM ``Booster`` does not satisfy.
 """
 
 from __future__ import annotations
@@ -21,7 +29,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from credit_risk.reporting.style import (  # noqa: E402
     C_BLUE,
-    C_GRAY,
     C_NAVY,
     apply_publication_style,
     despine,
@@ -78,10 +85,15 @@ def plot_pdp_grid(
     features: list[str],
     fig_dir: Path = Path("reports/figures/validation"),
     grid_size: int = 25,
+    max_features: int = 4,
 ) -> plt.Figure:
-    """Grid of partial-dependence plots for the top ``features``."""
+    """Grid of partial-dependence plots for the top ``features``.
+
+    ``max_features`` caps the grid; it used to be a hardcoded ``[:4]`` that silently
+    discarded whatever else the caller asked for.
+    """
     apply_publication_style()
-    feats = [f for f in features if f in X.columns][:4]
+    feats = [f for f in features if f in X.columns][:max_features]
     n = max(1, len(feats))
     ncols = 2 if n > 1 else 1
     nrows = int(np.ceil(n / ncols))

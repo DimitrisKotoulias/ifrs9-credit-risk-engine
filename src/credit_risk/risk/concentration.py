@@ -42,7 +42,6 @@ def granularity_adjustment(
     pd_arr: np.ndarray,
     lgd_arr: np.ndarray,
     ead_arr: np.ndarray,
-    rho: float = 0.15,  # noqa: ARG001 - kept for API symmetry / future ASRF variants
 ) -> float:
     """Simplified Gordy-Lutkebohmert granularity adjustment (capital surcharge).
 
@@ -50,6 +49,12 @@ def granularity_adjustment(
     ``UL_i = sqrt(PD_i (1-PD_i)) * LGD_i * EAD_i``, and returns the concentration
     add-on ``GA = sum(UL_i^2) / (2 * total_EAD)``. GA -> 0 as the portfolio becomes
     granular (many small exposures) and grows with name concentration.
+
+    There is deliberately no ``rho`` parameter. This simplified form is purely
+    idiosyncratic --- the systematic factor cancels out of it --- so the asset correlation
+    has nothing to act on. The signature used to accept one anyway, marked
+    ``# noqa: ARG001``, and the pipeline dutifully passed ``cfg.econ_cap.rho`` into it: a
+    configuration knob that appeared to steer the surcharge and did nothing whatsoever.
     """
     pd_arr = np.clip(np.asarray(pd_arr, dtype=float), _PD_CLIP, 1.0 - _PD_CLIP)
     lgd_arr = np.clip(np.asarray(lgd_arr, dtype=float), 0.0, 1.0)
@@ -108,9 +113,12 @@ def run_concentration(
     pd_col: str = "pd_pred",
     lgd_col: str = "lgd_pred",
     ead_col: str = "ead",
-    rho: float = 0.15,
 ) -> tuple[dict[str, object], dict[str, pd.Series]]:
     """Compute the concentration summary and per-dimension grouped exposures.
+
+    ``pd_col`` should be the **12-month** PD, matching the horizon of the capital number
+    the granularity surcharge is added to. There is no ``rho`` argument: the simplified
+    granularity adjustment is purely idiosyncratic (see ``granularity_adjustment``).
 
     Returns ``(summary, grouped)`` where ``summary`` has keys ``dimensions``
     (list of dicts) and ``granularity_adjustment``.
@@ -123,7 +131,6 @@ def run_concentration(
         df[pd_col].to_numpy(dtype=float),
         df[lgd_col].to_numpy(dtype=float),
         df[ead_col].to_numpy(dtype=float),
-        rho=rho,
     )
     summary: dict[str, object] = {
         "dimensions": hhi_df.to_dict(orient="records"),

@@ -29,8 +29,17 @@ def plot_ecl_tornado(
 
     Z convention (Vasicek Eq. 15): Z < 0 = adverse shock (recession, ECL up);
     Z > 0 = favourable shock (expansion, ECL down).
+
+    ``scenario_shocks`` carries the implied Z of each priced scenario so the baseline row
+    can be identified. The Z = 0 row is the unconditional anchor and is labelled as such.
     """
     apply_publication_style()
+    baseline_z = None
+    if scenario_shocks:
+        try:
+            baseline_z = float(scenario_shocks.get("baseline"))
+        except (TypeError, ValueError):
+            baseline_z = None
     df = sensitivity_df.copy().sort_values("macro_shock", ascending=False)
     base_row = df[df["macro_shock"] == 0.0]
     if base_row.empty:
@@ -41,10 +50,17 @@ def plot_ecl_tornado(
     df["ecl_change_pct"] = (df["total_ecl"] - base_ecl) / (base_ecl + 1e-9) * 100
     
     # We want labels like "Z = +2.0" or "Z = -2.0"
+    # Z = 0 is the UNCONDITIONAL anchor, not the priced baseline scenario: the baseline
+    # scenario has its own non-zero implied Z (metrics["macro_implied_shocks"]["baseline"]),
+    # and the headline ECL is probability-weighted across all three scenarios. Labelling
+    # this row "Baseline" implied the sensitivities were measured against the reported
+    # provision, which they are not.
     labels = []
     for z in df["macro_shock"]:
         if z == 0.0:
-            labels.append("Z = 0.0 (Baseline)")
+            labels.append("Z = 0.0 (unconditional anchor)")
+        elif baseline_z is not None and abs(z - baseline_z) < 1e-9:
+            labels.append(f"Z = {z:+.2f} (baseline scenario)")
         else:
             labels.append(f"Z = {z:+.1f}")
             
@@ -54,7 +70,7 @@ def plot_ecl_tornado(
     fig, ax = plt.subplots(figsize=(10, max(5, len(df) * 0.5)))
     bars = ax.barh(labels, values, color=colors, alpha=0.85, height=0.6)
     ax.axvline(0, color=C_NAVY, linewidth=1.5, zorder=3)
-    ax.set_xlabel("ECL Change vs Baseline (%)", fontsize=12, labelpad=8)
+    ax.set_xlabel("ECL Change vs Z = 0 anchor (%)", fontsize=12, labelpad=8)
     ax.set_ylabel("Macro Shock (Vasicek Z-factor)", fontsize=12, labelpad=8)
     ax.set_title("ECL Portfolio Sensitivity to Macroeconomic Shocks", fontsize=13, fontweight="bold", pad=12)
     despine(ax)
@@ -72,7 +88,7 @@ def plot_ecl_tornado(
         chg_abs = row["total_ecl"] - base_ecl
         chg_abs_str = f"${chg_abs/1e6:+.1f}M"
         if val == 0.0:
-            label_text = f"Baseline (${row['total_ecl']/1e6:.1f}M)"
+            label_text = f"Anchor (${row['total_ecl']/1e6:.1f}M)"
             x_pos = 0.5
             ha = "left"
         else:
@@ -98,11 +114,13 @@ def plot_cutoff_profit(
     fig_dir: Path = Path("reports/figures"),
     opt_cutoff: int | None = None,
 ) -> plt.Figure:
-    """Expected Profit and RAROC vs score cutoff, optimum marked.
+    """Expected Profit and RAROC vs score cutoff, operating point marked.
 
-    Two stacked panels sharing the x-axis (no dual axis): top = Expected
-    Profit ($M), bottom = RAROC (%). ``opt_cutoff`` marks the reconciled
-    marginal-RAROC-hurdle optimum (interior); if None, falls back to the
+    Two stacked panels sharing the x-axis (no dual axis): top = Expected Profit ($M),
+    bottom = RAROC (%). ``opt_cutoff`` marks the **risk-appetite** cutoff -- the most
+    inclusive score whose approved bad rate stays under the ceiling -- not a
+    marginal-RAROC-hurdle optimum, which is what this docstring used to claim and what the
+    metrics key ``cutoff_optimal_profit`` still implies. If None, falls back to the
     total-profit argmax for backward compatibility.
     """
     apply_publication_style()
@@ -293,7 +311,9 @@ def plot_shock_tornado(
     fig, ax = plt.subplots(figsize=(11, 6.5))
     bars = ax.barh(df["scenario"].astype(str), delta_m, color=colors, alpha=0.85)
     ax.axvline(0, color=C_NAVY, linewidth=1.0)
-    ax.set_xlabel(r"Change in ECL vs Baseline (\$M)", fontsize=11)
+    # No `text.usetex` in style.py, so `\$` is not an escape here -- it rendered as a
+    # literal backslash on the published axis. Matplotlib takes a plain dollar sign.
+    ax.set_xlabel("Change in ECL vs Baseline ($M)", fontsize=11)
     ax.set_title("ECL Sensitivity — PD / LGD / EAD Stress Scenarios",
                  fontsize=13, fontweight="bold", pad=10)
     span = max(abs(delta_m.min()), abs(delta_m.max()), 1e-9)
@@ -335,11 +355,27 @@ def plot_concentration(
 
     for ax, dim in zip(axes, dims):
         s = grouped[dim]
-        s = s.nlargest(top_n) if len(s) > top_n else s
-        pct = (s / s.sum() * 100.0).sort_values(ascending=True)
+        # The denominator is the WHOLE portfolio, computed before truncation. Taking
+        # `s.sum()` after `nlargest(top_n)` divided by the top-N subtotal instead, so every
+        # bar was inflated by portfolio-total / top-N-total while the axis said "% of
+        # Portfolio Exposure" -- and the figure then disagreed with the HHI table beside
+        # it, which is computed from the full series. `addr_state` (50+ categories) tripped
+        # this on every run.
+        portfolio_total = float(s.sum())
+        truncated = len(s) > top_n
+        s_top = s.nlargest(top_n) if truncated else s
+        pct = (s_top / (portfolio_total or 1.0) * 100.0).sort_values(ascending=True)
         ax.barh([str(i) for i in pct.index], pct.to_numpy(), color=C_BLUE, alpha=0.85)
         title = dim.replace("addr_state", "State").replace("_", " ").title()
-        ax.set_title(f"Exposure by {title}", fontsize=12, fontweight="bold", pad=8)
+        if truncated:
+            shown = float(s_top.sum()) / (portfolio_total or 1.0) * 100.0
+            ax.set_title(
+                f"Exposure by {title}\ntop {top_n} of {len(s)} categories "
+                f"({shown:.0f}% of portfolio)",
+                fontsize=12, fontweight="bold", pad=8,
+            )
+        else:
+            ax.set_title(f"Exposure by {title}", fontsize=12, fontweight="bold", pad=8)
         ax.set_xlabel("% of Portfolio Exposure", fontsize=10)
         despine(ax)
         ax.grid(True, axis="x", color=C_GRID, linewidth=0.6)
@@ -453,6 +489,9 @@ def plot_shap_comparison(
     top_n: int = 12,
 ) -> plt.Figure:
     """Side-by-side SHAP importance: full model vs bureau-only model.
+
+    Retained for ad-hoc use; not called by the pipeline and ``shap_comparison.png`` is not
+    referenced by the report.
 
     Each input is a mean-abs-SHAP summary (columns ``feature, mean_abs_shap``). The full
     model includes price features (``int_rate``, ``grade``); the bureau-only model

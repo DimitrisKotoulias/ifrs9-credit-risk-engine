@@ -1,6 +1,8 @@
 """Validation report generator.
 
-Runs full validation suite and writes metrics.json + all figures.
+Runs the full validation suite and writes ``outputs/metrics_validation.json`` plus all
+validation figures. The complete ``outputs/metrics.json`` is written once, at the end of
+the pipeline; this module deliberately no longer writes to that path.
 """
 
 from __future__ import annotations
@@ -29,7 +31,6 @@ from credit_risk.validation.discrimination import (
 from credit_risk.validation.stability import (
     compute_csi,
     compute_psi,
-    compute_psi_table,
     plot_psi_distribution,
 )
 from credit_risk.reporting.style import apply_publication_style
@@ -84,12 +85,12 @@ def run_validation(
 
     # Gains chart — OOT, so it matches the OOT material it is presented alongside in the
     # report. It used to be built on the in-time test partition and shown next to the OOT
-    # ROC overlay with no partition label (Flaws.md finding N42).
+    # ROC overlay with no partition label (FLAWS-N42).
     _savefig(plot_gains_chart(y_oot, y_pred_oot), "gains_chart", fig_dir)
 
     # The test-partition ROC and KS figures are no longer produced: neither was referenced
     # by the report, and the OOT overlay below already shows the test curve alongside the
-    # OOT one (Flaws.md finding N37).
+    # OOT one (FLAWS-N37).
 
     # ROC + KS figures — OOT set (Fix 1.5: Figure 5 must show OOT metrics)
     _savefig(plot_roc_curve(y_oot, y_pred_oot, label="Scorecard (OOT)"), "roc_curve_oot", fig_dir)
@@ -115,7 +116,7 @@ def run_validation(
     # Triggered by OUT-OF-TIME evidence, fitted on the earlier half of the OOT window,
     # and accepted only if it demonstrably improves the later half (which is never used
     # for fitting). The previous gate tested the in-time partition, which cannot see the
-    # 2016-2018 era drift at all -- see docs/AUDIT.md finding A1.
+    # 2016-2018 era drift at all -- see AUDIT-A1.
     if oot_order_key is None:
         logger.warning(
             "No OOT ordering key supplied: the recalibration gate will use a POSITIONAL "
@@ -130,7 +131,7 @@ def run_validation(
     # Record the actual date span of each slice. A chronological split must satisfy
     # max(fit) <= min(eval); publishing the bounds makes that checkable rather than
     # assumed, which is exactly what let a positional split masquerade as out-of-time
-    # (Flaws.md finding N3).
+    # (FLAWS-N3).
     slice_bounds: dict = {}
     if split_basis == "issue_date":
         _keys = pd.Series(oot_order_key)
@@ -211,11 +212,18 @@ def run_validation(
         oot_degradation["ks_degradation"],
     )
 
-    # ── Save metrics ───────────────────────────────────────────────────────────
+    # ── Save the validation slice ──────────────────────────────────────────────
+    #
+    # Under its own name. This used to write `metrics.json`, the same file the pipeline
+    # overwrites in full at the end: a crash anywhere in Phases 4-9 therefore left a
+    # validation-only file that looked complete, and `make report` would happily render it,
+    # filling the gaps from the renderer's hardcoded defaults. Those defaults are gone now,
+    # but the two writers were the reason a partial file could ever be mistaken for a
+    # finished run.
     output_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = output_dir / "metrics.json"
+    metrics_path = output_dir / "metrics_validation.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2, default=float)
-    logger.info("Metrics written to %s", metrics_path)
+    logger.info("Validation metrics written to %s", metrics_path)
 
     return metrics, calibrator

@@ -102,12 +102,29 @@ def generate_accepted(n_loans: int = 50_000, seed: int = 42) -> pd.DataFrame:
     severity = np.where(cure, 0.0, np.clip(rng.beta(0.5, 2, n_loans), 0, 1))
     recoveries = np.where(is_bad, funded_amnt * (1 - severity), 0.0)
 
-    loan_status = np.where(is_bad, "Charged Off", "Fully Paid")
+    # Status vocabulary matching the real file, not just the two resolved extremes.
+    #
+    # The generator emitted only "Charged Off" / "Fully Paid", so in synthetic data every
+    # loan is resolved by construction. That made three things untestable: the
+    # n_accepted_file / n_resolved / n_modelling funnel, the exclusion of unresolved
+    # ("grey zone") statuses in data/target.py, and the fact that the bad set includes
+    # `Late (31-120 days)` -- a current delinquency state rather than a terminal outcome.
+    _u = rng.random(n_loans)
+    loan_status = np.where(
+        is_bad,
+        np.where(_u < 0.80, "Charged Off",
+                 np.where(_u < 0.92, "Late (31-120 days)", "Default")),
+        np.where(_u < 0.82, "Fully Paid",
+                 np.where(_u < 0.96, "Current", "In Grace Period")),
+    )
+    # `Current` / `In Grace Period` are neither good nor bad: define_target drops them, so
+    # the modelling population is genuinely smaller than the file, as in production.
 
     logger.info(
-        "Synthetic accepted: n=%d, default_rate=%.2f%%",
+        "Synthetic accepted: n=%d, default_rate=%.2f%%, unresolved=%.1f%%",
         n_loans,
         is_bad.mean() * 100,
+        float(np.isin(loan_status, ["Current", "In Grace Period"]).mean() * 100),
     )
 
     return pd.DataFrame({
@@ -115,7 +132,10 @@ def generate_accepted(n_loans: int = 50_000, seed: int = 42) -> pd.DataFrame:
         "funded_amnt": funded_amnt,
         "funded_amnt_inv": funded_amnt * rng.uniform(0.95, 1.0, n_loans),  # leakage test
         "term": [f" {t} months" for t in term],
-        "int_rate": int_rate,
+        # Percent STRING, exactly as the LendingClub CSV stores it ("13.56%"). The
+        # generator emitted a bare fraction, so `normalize_int_rate_to_fraction` and the
+        # loader's percent parsing were never exercised on realistic input by any test.
+        "int_rate": [f"{r * 100:.2f}%" for r in int_rate],
         "installment": installment,
         "grade": grades,
         "sub_grade": sub_grades,
@@ -177,10 +197,12 @@ def generate_rejected(n_loans: int = 20_000, seed: int = 43) -> pd.DataFrame:
     # Rejected applicants tend to have worse risk profiles
     fico = np.clip(rng.normal(615, 60, n_loans), 500, 760).astype(int)
     dti = np.clip(rng.normal(28, 12, n_loans), 0, 70)
-    annual_inc = np.exp(rng.normal(10.4, 0.7, n_loans)).clip(10_000, 300_000)
 
     logger.info("Synthetic rejected: n=%d", n_loans)
 
+    # No `annual_inc`. The real LendingClub rejected-loans file has no income column at
+    # all -- that is precisely why reject inference has to impute it -- so generating one
+    # let the alignment/imputation path be tested against a feature production never has.
     return pd.DataFrame({
         "loan_amnt": rng.integers(500, 40_001, n_loans).astype(float),
         "application_date": app_date,
@@ -191,5 +213,4 @@ def generate_rejected(n_loans: int = 20_000, seed: int = 43) -> pd.DataFrame:
         "addr_state": rng.choice(_STATES, size=n_loans),
         "employment_length": rng.choice(_EMP_LENGTHS, size=n_loans),
         "policy_code": "0",
-        "annual_inc": annual_inc,
     })

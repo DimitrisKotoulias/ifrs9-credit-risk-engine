@@ -18,7 +18,7 @@ reflects this ("comparison against published reference ranges", not "verificatio
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # ── shared driver comments (surface when a value falls outside its band) ──────────
 _LGD_NOTE = (

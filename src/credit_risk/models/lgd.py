@@ -112,7 +112,6 @@ class LGDModel:
         feature_cols:
             Features to use. Defaults to a robust small feature set.
         """
-        from sklearn.linear_model import LogisticRegression  # noqa: PLC0415
         from sklearn.preprocessing import StandardScaler  # noqa: PLC0415
 
         if len(df_defaults) == 0:
@@ -194,7 +193,7 @@ class LGDModel:
         # Downturn LGD — percentile of the REALISED severity distribution, not of the
         # model's fitted values. Predictions are shrunk toward the conditional mean, so a
         # percentile taken over them yields a near-vacuous uplift over mean LGD and does
-        # not represent a downturn stress (docs/AUDIT.md finding B3).
+        # not represent a downturn stress (AUDIT-B3).
         all_preds = self.predict(df_defaults)
         realised_loss = lgd_series[lgd_series > 0]
         self._downturn_lgd = self._downturn_from_realised(realised_loss, all_preds, lgd_series)

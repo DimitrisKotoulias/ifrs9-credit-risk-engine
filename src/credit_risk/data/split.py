@@ -31,7 +31,7 @@ class DataSplit:
     # target definition has dropped indeterminate statuses, so len(full_accepted) is the
     # resolved-outcome population, NOT the raw file row count. Use `n_accepted_file` for
     # the latter — conflating the two is what put a stale figure in the report abstract
-    # (docs/AUDIT.md finding A5).
+    # (AUDIT-A5).
     full_accepted: pd.DataFrame | None = None
     n_accepted_file: int = 0  # rows read from the accepted-loans source file
 
@@ -122,7 +122,7 @@ def _assert_no_overlap(
 
     An index-set comparison alone is vacuous: train/test and OOT are built from mutually
     exclusive date masks, so their indices can never intersect and the check can never
-    fail (docs/AUDIT.md finding C7). The temporal assertion below is the one that can
+    fail (AUDIT-C7). The temporal assertion below is the one that can
     actually catch a leakage bug.
     """
     train_idx, test_idx, oot_idx = set(train.index), set(test.index), set(oot.index)

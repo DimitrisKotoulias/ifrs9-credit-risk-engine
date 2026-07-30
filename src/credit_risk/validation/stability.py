@@ -17,7 +17,7 @@ import pandas as pd
 
 from credit_risk.reporting.style import (
     apply_publication_style, despine,
-    C_NAVY, C_BLUE, C_GOLD, C_GRAY, C_RED, C_GREEN, C_GRID,
+    C_NAVY, C_BLUE, C_GOLD, C_RED, C_GREEN, C_GRID,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,6 @@ def plot_psi_distribution(
         fig = ax.figure
 
     psi_val = compute_psi(expected, actual)
-    band    = psi_band(psi_val)
 
     ax.hist(expected, bins=40, alpha=0.6, density=True,
             color=C_BLUE, label=label_exp)

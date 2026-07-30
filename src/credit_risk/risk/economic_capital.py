@@ -36,8 +36,23 @@ def _aggregate_buckets(
     lgd_arr: np.ndarray,
     ead_arr: np.ndarray,
     n_buckets: int,
+    n_ead_strata: int = 4,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Aggregate obligors into EAD-weighted, PD-ranked homogeneous buckets.
+    """Aggregate obligors into buckets homogeneous in **both** PD and EAD.
+
+    Buckets were formed by PD rank alone, and each one then contributed
+    ``defaults x mean_ead`` to the simulated loss. Within a PD bucket, though, exposure
+    spans the whole book's range: a $1k loan and a $35k loan with the same PD were treated
+    as interchangeable, so which obligors defaulted carried no exposure information at all.
+    That suppresses precisely the co-movement that drives the tail --- the scenarios where
+    the large exposures are the ones that default --- and the 99.9% VaR and ES the capital
+    number rests on came out too low. The docstring also claimed EAD-weighting that only
+    ever applied to the PD and LGD aggregates.
+
+    Obligors are now PD-ranked into ``n_buckets / n_ead_strata`` groups and each group is
+    then split by EAD quantile into ``n_ead_strata`` strata, so exposure dispersion is
+    carried by the bucket structure rather than averaged away. Total bucket count is
+    unchanged, so the simulation cost is unchanged.
 
     Returns
     -------
@@ -46,6 +61,8 @@ def _aggregate_buckets(
     """
     n = len(pd_arr)
     n_buckets = int(max(1, min(n_buckets, n)))
+    n_ead_strata = int(max(1, min(n_ead_strata, n_buckets)))
+    n_pd_groups = int(max(1, n_buckets // n_ead_strata))
 
     order = np.argsort(pd_arr, kind="stable")
     pd_s = pd_arr[order]
@@ -53,7 +70,7 @@ def _aggregate_buckets(
     ead_s = ead_arr[order]
 
     # Contiguous PD-ranked groups of near-equal size.
-    edges = np.linspace(0, n, n_buckets + 1).astype(int)
+    edges = np.linspace(0, n, n_pd_groups + 1).astype(int)
 
     counts: list[float] = []
     pd_b: list[float] = []
@@ -62,15 +79,23 @@ def _aggregate_buckets(
     for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         if hi <= lo:
             continue
-        w = ead_s[lo:hi]
-        w_sum = float(w.sum())
-        if w_sum <= 0.0:  # degenerate zero-EAD slice: fall back to equal weights
-            w = np.ones(hi - lo)
-            w_sum = float(w.sum())
-        counts.append(float(hi - lo))
-        pd_b.append(float(np.average(pd_s[lo:hi], weights=w)))
-        lgd_b.append(float(np.average(lgd_s[lo:hi], weights=w)))
-        ead_b.append(float(ead_s[lo:hi].mean()))
+        # Within the PD group, stratify by exposure.
+        grp_pd, grp_lgd, grp_ead = pd_s[lo:hi], lgd_s[lo:hi], ead_s[lo:hi]
+        ead_order = np.argsort(grp_ead, kind="stable")
+        grp_pd, grp_lgd, grp_ead = (
+            grp_pd[ead_order], grp_lgd[ead_order], grp_ead[ead_order]
+        )
+        sub_edges = np.linspace(0, len(grp_ead), n_ead_strata + 1).astype(int)
+        for s_lo, s_hi in zip(sub_edges[:-1], sub_edges[1:], strict=True):
+            if s_hi <= s_lo:
+                continue
+            w = grp_ead[s_lo:s_hi]
+            if float(w.sum()) <= 0.0:  # degenerate zero-EAD slice: equal weights
+                w = np.ones(s_hi - s_lo)
+            counts.append(float(s_hi - s_lo))
+            pd_b.append(float(np.average(grp_pd[s_lo:s_hi], weights=w)))
+            lgd_b.append(float(np.average(grp_lgd[s_lo:s_hi], weights=w)))
+            ead_b.append(float(grp_ead[s_lo:s_hi].mean()))
 
     return (
         np.asarray(counts, dtype=float),
@@ -132,7 +157,7 @@ def simulate_portfolio_losses(
     # economic-capital and regulatory-capital figures are presented side by side: with a
     # flat rho=0.15 against a supervisory R that collapses to ~0.03 at this book's PDs,
     # the headline EC/RegCap ratio was driven mostly by a 5x correlation difference, not
-    # by the tail fidelity the report attributed it to (Flaws.md finding N13).
+    # by the tail fidelity the report attributed it to (FLAWS-N13).
     if isinstance(rho, str):
         if rho != "supervisory":
             raise ValueError(f"unknown rho mode {rho!r}; expected a float or 'supervisory'")

@@ -67,7 +67,7 @@ def update_headline_counts(readme: str, metrics: dict) -> str:
     Three distinct populations exist and the README used to conflate them: it labelled the
     resolved-outcome count as "accepted" and the modelling population as "resolved", so
     every figure was attached to the wrong name and the README contradicted the report's
-    own abstract (docs/AUDIT.md finding A5; Flaws.md finding N19).
+    own abstract (AUDIT-A5; FLAWS-N19).
 
       accepted   = rows in the source file            (n_accepted_file)
       resolved   = rows with a good/bad outcome       (n_resolved_outcome)
@@ -99,7 +99,7 @@ def update_figure_captions(readme: str, metrics: dict) -> str:
     """Rewrite the numbers hand-typed into the Key Visualizations captions.
 
     These sat outside the METRICS block and had drifted several runs behind the table
-    directly above them (Flaws.md finding N19).
+    directly above them (FLAWS-N19).
     """
     gini_test = _num(metrics.get("gini"))
     gini_oot = _num(metrics.get("gini_oot"))

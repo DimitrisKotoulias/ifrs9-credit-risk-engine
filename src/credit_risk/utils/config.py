@@ -54,14 +54,11 @@ class ScorecardConfig(BaseModel):
 
 class LGDConfig(BaseModel):
     downturn_percentile: float = 90.0
-    min_lgd: float = 0.0
-    max_lgd: float = 1.0
 
 
 class BaselConfig(BaseModel):
     pd_floor: float = 0.0003
     capital_ratio: float = 0.08
-    maturity_adjustment: bool = False
     stress_rho: float = 0.15    # ASRF retail asset correlation for stress test
     stress_z: float = -2.0      # Vasicek systematic factor shock (severe recession)
 
@@ -80,6 +77,8 @@ class SICRConfigYaml(BaseModel):
 class IFRS9Config(BaseModel):
     sicr_pd_multiplier: float = 2.5
     sicr_abs_threshold: float = 0.20   # absolute lifetime-PD level that triggers SICR
+    # Declared, not consumed — no servicing panel exists to measure DPD against. See the
+    # note in config/config.yaml.
     sicr_dpd_backstop: int = 30
     stage3_dpd: int = 90
     scenarios: dict[str, MacroScenario]
@@ -111,8 +110,6 @@ class MacroTsConfig(BaseModel):
 
 
 class BusinessConfig(BaseModel):
-    interest_revenue_rate: float = 0.12
-    cost_per_approval: float = 50.0
     # Cut-off economics (used by the RAROC-hurdle decision rule, Phase 9)
     fee_income_rate: float = 0.01        # upfront fee income as fraction of EAD
     funding_cost_rate: float = 0.04      # cost of funds as fraction of EAD
@@ -132,7 +129,7 @@ class PathsConfig(BaseModel):
 class Config(BaseModel):
     random_seed: int = 42
     # Portfolio reporting date. Exposure at this date is what the EAD model measures, so
-    # loan age is computed against it rather than assumed (Flaws.md finding N10).
+    # loan age is computed against it rather than assumed (FLAWS-N10).
     reporting_date: str = "2018-12-31"
     data: DataConfig
     target: TargetConfig

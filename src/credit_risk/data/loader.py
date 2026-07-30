@@ -132,8 +132,6 @@ def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
         else:
             return pd.Series(default_val, index=out.index)
 
-    # 1. Continuous FICO low
-    fico_low = get_series("fico_range_low", 690.0).fillna(690.0)
 
     # 2. Debt Burden Ratios
     annual_inc = get_series("annual_inc", 50000.0).fillna(50000.0).clip(lower=1.0)

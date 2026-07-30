@@ -72,7 +72,7 @@ def portfolio_el_summary(
         "n_loans": len(df),
     }
     # The docstring has always promised mean_lgd; it was simply never returned
-    # (Flaws.md finding N26).
+    # (FLAWS-N26).
     if lgd_col in df.columns:
         out["mean_lgd"] = float(df[lgd_col].mean())
     return out

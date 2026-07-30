@@ -48,8 +48,7 @@ def plot_default_rate_by_grade(df: pd.DataFrame, fig_dir: Path = _FIG_DIR) -> Pa
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
     
-    # Gradient colors from green (A) to red (G)
-    import matplotlib.cm as cm
+    # Gradient colors from green (A) to red (G). `cm` is imported at module level.
     n_grades = len(rates)
     norm_vals = np.linspace(0.85, 0.15, n_grades)
     colors = [cm.RdYlGn(v) for v in norm_vals]
@@ -325,8 +324,14 @@ def plot_numeric_distributions(
             data = data.clip(upper=data.quantile(0.995))
         good = data[df.loc[data.index, TARGET_COL] == 0]
         bad  = data[df.loc[data.index, TARGET_COL] == 1]
-        ax.hist(good, bins=40, alpha=0.6, color=C_GREEN, label="Good", density=True)
-        ax.hist(bad,  bins=40, alpha=0.6, color=C_RED,   label="Bad",  density=True)
+        # Shared bin edges from the pooled data. `bins=40` computes its own edges per
+        # call, from each subgroup's own range, so the two densities were drawn on
+        # different grids with different bin widths -- and comparing them, which is the
+        # entire point of the figure, was not valid.
+        _lo, _hi = float(data.min()), float(data.max())
+        edges = np.linspace(_lo, _hi, 41) if _hi > _lo else 40
+        ax.hist(good, bins=edges, alpha=0.6, color=C_GREEN, label="Good", density=True)
+        ax.hist(bad,  bins=edges, alpha=0.6, color=C_RED,   label="Bad",  density=True)
         ax.set_title(col.replace("_", " ").title(), fontsize=11, fontweight="bold")
         ax.set_yticks([])
         ax.legend(fontsize=8, framealpha=0.9)

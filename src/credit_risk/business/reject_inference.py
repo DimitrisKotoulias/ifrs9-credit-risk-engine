@@ -96,7 +96,7 @@ def refit_with_parcelling(
     the reject population are used, and both Gini figures are computed on the same
     feature set with the same weighting.
 
-    Why this matters (Flaws.md finding N33): the reject file shares only about five
+    Why this matters (FLAWS-N33): the reject file shares only about five
     fields with the accepted file, and everything else was mean-imputed to a train
     constant. Roughly two thirds of the model was therefore a constant across half the
     fitting sample, and a constant predictor has zero discriminatory power. The reported

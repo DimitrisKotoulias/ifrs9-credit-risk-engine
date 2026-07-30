@@ -1,4 +1,10 @@
-"""Discrimination metrics: AUC, Gini, KS, gains/lift, decile rank-ordering."""
+"""Discrimination metrics: AUC, Gini, KS, gains/lift, decile rank-ordering.
+
+Note: ``pd_backtest_by_vintage`` used to live here as well. It was a second, never-called
+implementation of ``validation.backtest.vintage_pd_accuracy`` whose docstring described
+its output as a 12-month PD backtest while the column it was fed is a lifetime PD. Deleted
+rather than kept: one live implementation of the vintage backtest, in ``backtest.py``.
+"""
 
 from __future__ import annotations
 
@@ -63,7 +69,6 @@ def compute_discrimination(
     gini = 2.0 * auc - 1.0
 
     order = np.argsort(y_s)
-    y_s_sorted = y_s[order]
     y_t_sorted = y_t[order]
 
     n_bad = y_t.sum()
@@ -80,10 +85,24 @@ def compute_decile_table(
     y_true: np.ndarray | pd.Series,
     y_score: np.ndarray | pd.Series,
     score_is_pd: bool = True,
+    highest_risk_first: bool = True,
 ) -> pd.DataFrame:
-    """Rank-ordering table by score decile."""
+    """Rank-ordering table by score decile.
+
+    ``highest_risk_first`` (the default, and the credit-scoring convention) puts the
+    riskiest tenth in decile 1, so ``lift`` starts above 1 and decays, and ``cum_bad_rate``
+    runs above the 45-degree line. The table used to be built the other way round: decile 1
+    was the *safest* tenth, which inverted the lift column against every published example
+    and made the cumulative gains chart drawn from it sit below the random diagonal for its
+    whole range — a model that discriminates perfectly well reading as worse than a coin
+    toss. Pass ``False`` only if a caller genuinely wants ascending-risk ordering.
+
+    ``score_is_pd`` says which direction the input runs: a PD (higher = riskier) or a credit
+    score (higher = safer).
+    """
     df = pd.DataFrame({"y": np.asarray(y_true, dtype=int), "score": np.asarray(y_score)})
-    ascending = score_is_pd
+    # A PD ranked descending — or a credit score ranked ascending — puts the riskiest first.
+    ascending = (not score_is_pd) if highest_risk_first else score_is_pd
     df["decile"] = pd.qcut(
         df["score"].rank(method="first", ascending=ascending),
         q=10, labels=False, duplicates="drop",
@@ -213,9 +232,15 @@ def plot_gains_chart(
     y_score: np.ndarray,
     ax: plt.Axes | None = None,
 ) -> plt.Figure:
-    """Cumulative gains chart: navy model, gray random, shaded fill, capture annotations (Fig 10A spec)."""
+    """Cumulative gains chart: navy model, gray random, shaded fill, capture annotations.
+
+    Population ordered riskiest-first, which is what makes the curve sit *above* the random
+    diagonal and the shaded area read as captured bads.
+    """
     apply_publication_style()
-    decile_tbl = compute_decile_table(y_true, y_score, score_is_pd=True)
+    decile_tbl = compute_decile_table(
+        y_true, y_score, score_is_pd=True, highest_risk_first=True
+    )
     deciles = decile_tbl["decile"].values
     cum_bad_rate = decile_tbl["cum_bad_rate"].values
 
@@ -244,7 +269,7 @@ def plot_gains_chart(
 
     ax.xaxis.set_major_formatter(mtick.PercentFormatter(1.0))
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
-    ax.set_xlabel("Proportion of Population (Lowest PD First)", fontsize=11, labelpad=8)
+    ax.set_xlabel("Proportion of Population (Highest PD First)", fontsize=11, labelpad=8)
     ax.set_ylabel("Cumulative % of Bads Captured", fontsize=11, labelpad=8)
     ax.set_title("Cumulative Gains (Lift) Chart", fontsize=12, fontweight="bold", pad=10)
     ax.legend(loc="lower right", framealpha=0.9, fontsize=9)
@@ -329,51 +354,80 @@ def bootstrap_auc_ci(
     return float(np.mean(aucs)), float(np.quantile(aucs, a)), float(np.quantile(aucs, 1 - a))
 
 
+def _midrank(x: np.ndarray) -> np.ndarray:
+    """Ranks with ties averaged — the midrank of DeLong et al. (1988)."""
+    order = np.argsort(x)
+    sorted_x = x[order]
+    n = len(x)
+    ranks_sorted = np.empty(n, dtype=float)
+    i = 0
+    while i < n:
+        j = i
+        while j < n - 1 and sorted_x[j + 1] == sorted_x[i]:
+            j += 1
+        ranks_sorted[i:j + 1] = 0.5 * (i + j) + 1.0
+        i = j + 1
+    ranks = np.empty(n, dtype=float)
+    ranks[order] = ranks_sorted
+    return ranks
+
+
 def delong_test(
     y_true: np.ndarray,
     y_pred_a: np.ndarray,
     y_pred_b: np.ndarray,
 ) -> dict[str, float]:
-    """Hanley-McNeil variance approximation DeLong (1988) AUC comparison test."""
+    """DeLong (1988) test for two *correlated* ROC curves.
+
+    The point of DeLong is the covariance term: both models score the same loans, so their
+    AUC estimates are strongly positively correlated and
+    ``Var(AUC_a - AUC_b) = Var(a) + Var(b) - 2 Cov(a, b)``. This used to add two
+    Hanley-McNeil variances and stop there, treating the two AUCs as independent. That
+    inflates the standard error, shrinks z toward zero and makes the test far too
+    conservative -- and the report drew a non-significance conclusion from it.
+
+    Implemented with the fast midrank algorithm of Sun & Xu (2014), which gives the same
+    answer as the original placement-value formulation.
+    """
     from scipy import stats  # noqa: PLC0415
 
     y_true = np.asarray(y_true, dtype=float)
-    n1 = int(y_true.sum())
-    n0 = len(y_true) - n1
-    auc_a = float(roc_auc_score(y_true, y_pred_a))
-    auc_b = float(roc_auc_score(y_true, y_pred_b))
+    preds = np.vstack([
+        np.asarray(y_pred_a, dtype=float), np.asarray(y_pred_b, dtype=float)
+    ])
+    pos = preds[:, y_true == 1]
+    neg = preds[:, y_true == 0]
+    m, n = pos.shape[1], neg.shape[1]
+    if m < 2 or n < 2:
+        raise ValueError("DeLong test needs at least two positives and two negatives")
 
-    def _variance(auc: float) -> float:
-        q1 = auc / (2 - auc)
-        q2 = 2 * auc**2 / (1 + auc)
-        return (auc * (1 - auc) + (n1 - 1) * (q1 - auc**2) + (n0 - 1) * (q2 - auc**2)) / (n1 * n0)
+    k = 2
+    tx = np.array([_midrank(pos[r]) for r in range(k)])
+    ty = np.array([_midrank(neg[r]) for r in range(k)])
+    tz = np.array([_midrank(np.concatenate([pos[r], neg[r]])) for r in range(k)])
 
-    se = float(np.sqrt(_variance(auc_a) + _variance(auc_b)))
-    z = (auc_a - auc_b) / (se + 1e-15)
+    aucs = tz[:, :m].sum(axis=1) / (m * n) - (m + 1.0) / (2.0 * n)
+    # Structural components: v01 over positives, v10 over negatives.
+    v01 = (tz[:, :m] - tx) / n
+    v10 = 1.0 - (tz[:, m:] - ty) / m
+    s01 = np.cov(v01)
+    s10 = np.cov(v10)
+    cov = s01 / m + s10 / n  # 2x2 covariance matrix of (AUC_a, AUC_b)
+
+    contrast = np.array([1.0, -1.0])
+    var_diff = float(contrast @ cov @ contrast)
+    se = float(np.sqrt(max(var_diff, 0.0)))
+    z = float((aucs[0] - aucs[1]) / (se + 1e-15))
     p = float(2 * (1 - stats.norm.cdf(abs(z))))
-    return {"z_stat": float(z), "p_value": p, "auc_a": auc_a, "auc_b": auc_b}
-
-
-def pd_backtest_by_vintage(
-    df: pd.DataFrame,
-    pd_col: str = "pd_pred",
-    target_col: str = "target",
-    vintage_col: str = "issue_d",
-    freq: str = "Q",
-) -> pd.DataFrame:
-    """Compare predicted mean 12m PD vs observed default rate by origination cohort."""
-    df_work = df[[pd_col, target_col, vintage_col]].copy()
-    df_work["vintage"] = pd.to_datetime(df_work[vintage_col], errors="coerce").dt.to_period(freq)
-    df_work = df_work.dropna(subset=["vintage"])
-    result = (
-        df_work.groupby("vintage")
-        .agg(
-            n_loans=(target_col, "count"),
-            predicted_pd=(pd_col, "mean"),
-            actual_default_rate=(target_col, "mean"),
-        )
-        .reset_index()
-    )
-    result["pd_ratio"] = result["predicted_pd"] / result["actual_default_rate"].clip(lower=1e-9)
-    result["vintage"] = result["vintage"].astype(str)
-    return result
+    return {
+        "z_stat": z,
+        "p_value": p,
+        "auc_a": float(roc_auc_score(y_true, y_pred_a)),
+        "auc_b": float(roc_auc_score(y_true, y_pred_b)),
+        "se_diff": se,
+        # Correlation between the two AUC estimates; the term the old implementation
+        # assumed was zero. Reported so the report can state it rather than imply it.
+        "auc_correlation": float(
+            cov[0, 1] / np.sqrt(max(cov[0, 0] * cov[1, 1], 1e-300))
+        ),
+    }

@@ -15,10 +15,21 @@ scale factor):
 
 where Z is the systematic factor (Z < 0 = adverse). See `_apply_macro_shock`.
 
-Known limitation: the person-period dataset places every default event in the loan's
-final month (no observed default date exists in this data) and applies no censoring,
-so the estimated MOB slope is partly an artefact of that construction.
-See docs/AUDIT.md finding C4.
+Event timing and censoring: this data records no observed default *date*, so the
+person-period dataset is built against a duration proxy — cumulative payments divided by
+the contractual instalment (``models/ead.compute_months_on_book_at_default``), the same
+proxy the Kaplan-Meier/Cox challenger in ``models/survival.py`` uses. Defaulters contribute
+periods 1..d with the event at d; survivors contribute periods 1..d_obs, right-censored.
+
+This replaces the original construction, which gave every loan its FULL contractual term of
+person-periods and pinned every default event to the final one, with no censoring. That
+made the fitted hazard ~0 for the first twelve months of every loan, so ``pd_12m`` came back
+at ~1e-20 and the IFRS 9 Stage 1 (12-month ECL) leg provisioned exactly zero across half
+the book (AUDIT-C4, whose consequence was disclosed as an artefactual MOB
+slope but never quantified).
+
+Residual limitation: the duration is still a proxy, not an observed default month, and
+prepayment is treated as censoring rather than as a competing risk.
 
 Survival:
     S(t) = ∏_{s=1}^{t} (1 − h(s))
@@ -30,7 +41,6 @@ Survival:
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -72,6 +82,10 @@ class DiscreteHazardModel:
         self._scaler: StandardScaler | None = None
         self._feature_cols: list[str] = []
         self._fitted = False
+        # Which duration the person-period panel was built against. Surfaced into
+        # metrics.json by the pipeline so a silent fallback to the uncensored full-term
+        # construction cannot pass unnoticed.
+        self._duration_basis: str = "unknown"
 
     # ── Feature prep ──────────────────────────────────────────────────────────
 
@@ -99,7 +113,7 @@ class DiscreteHazardModel:
         # int_rate arrives as a FRACTION (loader.py divides by 100). Filling missing
         # values with the literal 12.0 therefore injected ~92x the column mean straight
         # into StandardScaler; normalising first makes the fallback 0.12 as intended
-        # (Flaws.md finding N25).
+        # (FLAWS-N25).
         int_rate = normalize_int_rate_to_fraction(
             pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
         )
@@ -116,17 +130,61 @@ class DiscreteHazardModel:
 
     # ── Fitting ────────────────────────────────────────────────────────────────
 
+    def _observation_windows(self, df: pd.DataFrame, terms: np.ndarray) -> np.ndarray:
+        """Per-loan number of person-periods, i.e. the observed duration.
+
+        Defaulters are observed until their (proxied) default month; survivors are
+        right-censored at the month their payments stop. Falls back to the full contractual
+        term — the original, uncensored construction — when no payment history is available
+        to infer a duration from, which is the case for synthetic fixtures.
+        """
+        from credit_risk.models.ead import (
+            compute_months_on_book_at_default,  # noqa: PLC0415
+            months_on_book_basis,  # noqa: PLC0415
+        )
+
+        cap = np.maximum(np.minimum(terms, self.max_horizon), 1)
+
+        # `months_on_book_basis(df, None)` skips the reporting-date branch: here we want
+        # each loan's own observed duration, not its age at a portfolio reporting date.
+        basis = months_on_book_basis(df, None)
+        if basis != "payments_observed":
+            self._duration_basis = "full_term_uncensored"
+            logger.warning(
+                "Hazard model: no payment history to infer a default month from, so the "
+                "person-period panel falls back to the FULL contractual term with every "
+                "event pinned to the final period and no censoring. The fitted 12-month "
+                "hazard will be ~0 and IFRS 9 Stage 1 ECL will be ~0 (the internal audit log C4)."
+            )
+            return cap
+
+        mob = pd.to_numeric(
+            compute_months_on_book_at_default(df), errors="coerce"
+        ).to_numpy(dtype=float)
+        # Round up: a loan observed for 5.4 months has been through 6 monthly periods.
+        window = np.ceil(np.nan_to_num(mob, nan=0.0))
+        window = np.clip(window, 1.0, cap).astype(int)
+        self._duration_basis = "payments_observed_censored"
+        logger.info(
+            "Hazard model duration basis: %s (mean observed window=%.1f months vs mean "
+            "contractual term=%.1f)",
+            self._duration_basis, float(window.mean()), float(cap.mean()),
+        )
+        return window
+
     def fit(self, df: pd.DataFrame, target_col: str = "target") -> "DiscreteHazardModel":
         """Fit discrete hazard model on loan-level panel data.
 
-        Creates person-period dataset internally: each loan contributes
-        one row per month until default or end-of-observation.
+        Creates a person-period dataset internally: each loan contributes one row per month
+        until it defaults or its observation window ends (right-censoring). See the module
+        docstring for how the duration is proxied.
 
         Parameters
         ----------
         df:
-            Loan-level DataFrame with `target` (1=default), `term`, `grade`,
-            `int_rate`, `dti`.
+            Loan-level DataFrame with `target` (1=default), `term`, `grade`, `int_rate`,
+            `dti`. `total_pymnt`/`funded_amnt` are used, when present, ONLY to place the
+            event in time — never as predictors — so the leakage policy is unaffected.
         target_col:
             Column name of default indicator.
         """
@@ -134,9 +192,7 @@ class DiscreteHazardModel:
         terms = self._term_num(df).values.astype(int)
         targets = df[target_col].fillna(0).astype(int).values
 
-        T_all = np.minimum(terms, self.max_horizon)
-        # Avoid empty periods if any term is <= 0
-        T_all = np.maximum(T_all, 1)
+        T_all = self._observation_windows(df, terms)
 
         rep_indices = np.repeat(np.arange(len(df)), T_all)
         mob = np.concatenate([np.arange(1, t + 1) for t in T_all])
@@ -145,7 +201,7 @@ class DiscreteHazardModel:
         # int_rate arrives as a FRACTION (loader.py divides by 100). Filling missing
         # values with the literal 12.0 therefore injected ~92x the column mean straight
         # into StandardScaler; normalising first makes the fallback 0.12 as intended
-        # (Flaws.md finding N25).
+        # (FLAWS-N25).
         int_rate = normalize_int_rate_to_fraction(
             pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
         )
@@ -179,10 +235,15 @@ class DiscreteHazardModel:
 
         event_rate = y.mean()
         logger.info(
-            "Hazard model fitted: %d person-periods, event rate=%.4f%%",
-            len(y), event_rate * 100,
+            "Hazard model fitted: %d person-periods, event rate=%.4f%% (duration basis: %s)",
+            len(y), event_rate * 100, self._duration_basis,
         )
         return self
+
+    @property
+    def duration_basis(self) -> str:
+        """How the person-period observation windows were derived — see `fit`."""
+        return self._duration_basis
 
     # ── Prediction ─────────────────────────────────────────────────────────────
 
@@ -231,7 +292,7 @@ class DiscreteHazardModel:
         # int_rate arrives as a FRACTION (loader.py divides by 100). Filling missing
         # values with the literal 12.0 therefore injected ~92x the column mean straight
         # into StandardScaler; normalising first makes the fallback 0.12 as intended
-        # (Flaws.md finding N25).
+        # (FLAWS-N25).
         int_rate = normalize_int_rate_to_fraction(
             pd.to_numeric(df.get("int_rate", 12.0), errors="coerce").fillna(12.0).values
         )
@@ -256,7 +317,7 @@ class DiscreteHazardModel:
         # terminal resolved status, that rate is a LIFETIME default rate. Applying the
         # same transform to each MONTHLY hazard compounded it over the whole term, badly
         # over-shocking the downside scenario and inflating the probability-weighted ECL
-        # (Flaws.md finding N15).
+        # (FLAWS-N15).
         #
         # The shock is therefore applied ONCE, to each loan's cumulative default
         # probability over its own term, and the resulting uplift is redistributed across
@@ -267,12 +328,17 @@ class DiscreteHazardModel:
         #     h'_t       = 1 - (1 - h_t)^alpha
         # which reproduces the target lifetime PD exactly, since S^alpha = e^{-alpha H}.
         #
-        # The anchor must be the lifetime horizon, not the first twelve months. This
-        # hazard model is fitted on a panel in which every default is placed in the loan's
-        # FINAL month (no observed default dates exist -- see Section 10), so the 12-month
-        # cumulative hazard is ~0 for every loan. Anchoring there made alpha identically 1
-        # and silently disabled the macro overlay altogether: every scenario returned the
-        # baseline ECL.
+        # The anchor must be the lifetime horizon because that is the horizon Z is
+        # calibrated on: risk/ifrs9_ecl.py inverts Vasicek on `ttc_dr = mean(target)`, and
+        # the target is the loan's terminal resolved status, i.e. a LIFETIME default rate.
+        # Anchoring the transform at twelve months would apply a lifetime-calibrated Z to a
+        # twelve-month probability, which is a different quantity.
+        #
+        # (Historically there was a second reason: the panel pinned every event to the
+        # loan's final month, so the 12-month cumulative hazard was ~0 and a 12-month anchor
+        # made alpha identically 1, silently disabling the macro overlay. The panel is now
+        # built with real durations and censoring, so that failure mode is gone; the
+        # calibration-horizon argument above is the one that still stands.)
         alpha_scale = None
         if macro_shock != 0.0:
             # Cumulative hazard to the end of each loan's own term.

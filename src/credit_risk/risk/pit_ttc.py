@@ -26,6 +26,7 @@ _DR_CLIP = 1e-6
 def decompose_pit_ttc(
     observed_default_rates: np.ndarray,
     rho: float = 0.15,
+    weights: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray]:
     """Invert the Vasicek model to recover the TTC PD and per-period systematic factor Z.
 
@@ -35,6 +36,13 @@ def decompose_pit_ttc(
 
         Z_t = (Phi^{-1}(PD_TTC) - Phi^{-1}(DR_t) sqrt(1 - rho)) / sqrt(rho).
 
+    ``weights`` are the loan counts behind each quarterly rate. They matter: an unweighted
+    mean gives a 2007 quarter of a few hundred loans the same say as a 2014 quarter of tens
+    of thousands, and the resulting "TTC PD" is then a different quantity from the one the
+    IFRS 9 macro model anchors on (``fit_macro_model`` uses the loan-weighted
+    ``df_train["target"].mean()``). Two different long-run PDs inside one engine is not a
+    modelling choice, it is an inconsistency. Passing ``None`` keeps the unweighted mean.
+
     Returns ``(ttc_pd, z_factors)``.
     """
     dr = np.clip(np.asarray(observed_default_rates, dtype=float), _DR_CLIP, 1.0 - _DR_CLIP)
@@ -42,7 +50,14 @@ def decompose_pit_ttc(
         return 0.0, np.asarray([], dtype=float)
     if not 0.0 < rho < 1.0:
         raise ValueError(f"rho must be in (0, 1), got {rho}")
-    ttc_pd = float(np.mean(dr))
+    if weights is None:
+        ttc_pd = float(np.mean(dr))
+    else:
+        w = np.asarray(weights, dtype=float)
+        if w.shape != dr.shape:
+            raise ValueError("weights must have the same shape as the default-rate series")
+        w = np.clip(w, 0.0, None)
+        ttc_pd = float(np.average(dr, weights=w)) if w.sum() > 0 else float(np.mean(dr))
     ttc_pd = min(max(ttc_pd, _DR_CLIP), 1.0 - _DR_CLIP)
     z = (ndtri(ttc_pd) - ndtri(dr) * np.sqrt(1.0 - rho)) / np.sqrt(rho)
     return ttc_pd, z
@@ -53,15 +68,19 @@ def run_pit_ttc(
     *,
     dr_col: str = "default_rate",
     quarter_col: str = "quarter",
+    n_col: str = "n_loans",
     rho: float = 0.15,
 ) -> dict[str, object]:
     """Decompose a quarterly default-rate frame into TTC PD + PiT Z factors.
 
-    Returns a dict with ``ttc_pd, rho, quarters, default_rates, z_factors``.
+    The TTC anchor is loan-weighted when ``n_col`` is present, matching the anchor the
+    IFRS 9 macro model uses. Returns a dict with
+    ``ttc_pd, ttc_weighted, rho, quarters, default_rates, z_factors``.
     """
     df = quarterly_df.dropna(subset=[dr_col]).copy()
     dr = df[dr_col].to_numpy(dtype=float)
-    ttc_pd, z = decompose_pit_ttc(dr, rho=rho)
+    weights = df[n_col].to_numpy(dtype=float) if n_col in df.columns else None
+    ttc_pd, z = decompose_pit_ttc(dr, rho=rho, weights=weights)
     quarters = (
         df[quarter_col].astype(str).tolist() if quarter_col in df.columns
         else [str(i) for i in range(len(dr))]
@@ -72,6 +91,7 @@ def run_pit_ttc(
     )
     return {
         "ttc_pd": ttc_pd,
+        "ttc_weighted": weights is not None,
         "rho": float(rho),
         "quarters": quarters,
         "default_rates": dr.tolist(),

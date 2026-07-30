@@ -12,7 +12,15 @@ Scorecard scaling (Appendix A):
     Offset = base_score − Factor · ln(base_odds)
 
 Points for attribute i:
-    Points_i = (−(WoE_i · β_i) + α / n) · Factor + Offset / n
+    Points_i = −(WoE_i · β_i + α / n) · Factor + Offset / n
+
+The intercept term carries a MINUS sign, matching Siddiqi (2017, Ch.5) and Anderson
+(2007, Ch.5). Written with `+ α/n` the table no longer sums to the model's own score: the
+points would total ``Factor·(α − Σ woe·β) + Offset`` while ``predict_score`` returns
+``Factor·(−α − Σ woe·β) + Offset``, a constant gap of ``2·α·Factor`` (−92.97 points on the
+fitted model). That put the maximum attainable points sum at 521 against an operating
+cutoff of 530, i.e. an auditor adding up the published table would conclude no applicant
+can ever be approved. ``tests/test_scorecard_points_reconcile.py`` now pins the identity.
 """
 
 from __future__ import annotations
@@ -38,7 +46,34 @@ _EMP_LENGTH_ORDER = {
 }
 
 
-def _add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+_INTERACTION_Z_COLS = ("dti", "fico_range_low")
+
+# Upper bound on drop-and-refit rounds in the scorecard's sign check. Each round removes at
+# least one feature, so convergence is guaranteed well inside this; the cap only stops a
+# pathological oscillation from looping forever.
+_MAX_SIGN_CHECK_ROUNDS = 10
+
+
+def fit_interaction_stats(df: pd.DataFrame) -> dict[str, float]:
+    """Learn the centring/scaling constants the z-scored interactions need.
+
+    These belong to the *training* cohort and must travel with the fitted model. Computing
+    them from whichever frame is being transformed made the preprocessing data-dependent:
+    the challenger was prepared separately on train / test / OOT, so each partition got its
+    own transform and the out-of-time split stopped being out-of-time for this feature.
+    """
+    stats: dict[str, float] = {}
+    for col in _INTERACTION_Z_COLS:
+        if col in df.columns:
+            s = pd.to_numeric(df[col], errors="coerce")
+            stats[f"{col}__median"] = float(s.median())
+            stats[f"{col}__std"] = float(s.std())
+    return stats
+
+
+def _add_interaction_features(
+    df: pd.DataFrame, stats: dict[str, float] | None = None
+) -> pd.DataFrame:
     """Construct interaction features capturing compounding credit risk signals.
 
     Features the loader (``data/loader.py``) already engineered are left alone. This
@@ -46,16 +81,26 @@ def _add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     different NaN handling, and it wrote a ``revol_util * acc_open_past_24mths`` product
     into the column named ``revol_util_x_open_acc`` --- which the loader had defined as
     ``revol_util * open_acc``. The report then interpreted the resulting IV/SHAP row under
-    the wrong definition (Flaws.md finding N24). The interaction over recently opened
+    the wrong definition (FLAWS-N24). The interaction over recently opened
     accounts now carries its own name, ``revol_util_x_new_acc``.
+
+    ``stats`` carries the training-cohort median/std used by the z-scored interaction (see
+    :func:`fit_interaction_stats`). Passing ``None`` falls back to the frame's own moments,
+    which is only correct when the frame *is* the training cohort.
     """
     out = df.copy()
 
     # Credit cycle stress: high DTI + low FICO → positive = high risk
     if "dti" in df.columns and "fico_range_low" in df.columns:
-        dti_z = (df["dti"].fillna(df["dti"].median()) - df["dti"].median()) / (df["dti"].std() + 1e-9)
-        fico_z = (df["fico_range_low"].fillna(df["fico_range_low"].median()) - df["fico_range_low"].median()) / (df["fico_range_low"].std() + 1e-9)
-        out["dti_fico_interaction"] = dti_z * (-fico_z)
+        def _z(col: str) -> pd.Series:
+            s = pd.to_numeric(df[col], errors="coerce")
+            med = (stats or {}).get(f"{col}__median")
+            std = (stats or {}).get(f"{col}__std")
+            if med is None or std is None:
+                med, std = float(s.median()), float(s.std())
+            return (s.fillna(med) - med) / (std + 1e-9)
+
+        out["dti_fico_interaction"] = _z("dti") * (-_z("fico_range_low"))
 
     # Loan affordability ratio — only if the loader has not already produced it.
     if (
@@ -157,7 +202,7 @@ class PDScorecard:
         self.max_vif = max_vif
         self.exclude_features = exclude_features
         # Minimum share of the training rows a feature must actually observe before it can
-        # be binned at all (Flaws.md finding N31, follow-on).
+        # be binned at all (FLAWS-N31, follow-on).
         self.min_bin_frac_for_selection = 0.01
 
         # Computed during fit
@@ -168,14 +213,17 @@ class PDScorecard:
         self._selected_features: list[str] = []
         self._scorecard_table: pd.DataFrame = pd.DataFrame()
         self._calibrator: Any = None
-        # Vintage scope of the calibrator — see set_calibrator (Flaws.md N5).
+        # Vintage scope of the calibrator — see set_calibrator (the internal review log N5).
         self._calibration_min_issue_year: int | None = None
         # Feature counts surviving each selection stage, so the report can describe the
         # real four-stage funnel instead of the two stages it used to claim
-        # (Flaws.md finding N29). Populated by fit().
+        # (FLAWS-N29). Populated by fit().
         self._selection_stages: dict[str, Any] = {}
         self._n_dropped_sparse: int = 0
         self._dropped_sparse: list[str] = []
+        # Training-cohort moments for the z-scored interaction features. Scoring reuses
+        # these instead of re-deriving them from whatever frame it is handed.
+        self._interaction_stats: dict[str, float] = {}
 
     # ── Fitting ────────────────────────────────────────────────────────────────
 
@@ -183,8 +231,6 @@ class PDScorecard:
         self,
         X_train: pd.DataFrame,
         y_train: pd.Series,
-        X_test: pd.DataFrame,
-        y_test: pd.Series,
     ) -> "PDScorecard":
         """Fit the full scorecard pipeline.
 
@@ -194,21 +240,25 @@ class PDScorecard:
         3. VIF filter
         4. ElasticNet (LogisticRegressionCV, SAGA) coefficient filter
         5. Logistic regression (statsmodels)
-        6. Sign check, then refit on the survivors
+        6. Sign check, dropping violators and refitting until the constraint holds
         7. Scorecard scaling
 
         Stages 2-4 and 6 each drop features; the surviving counts are recorded in
         ``self._selection_stages`` so the report can state the real funnel
-        (Flaws.md finding N29).
+        (FLAWS-N29).
+
+        There is no validation split here: the signature used to take ``X_test``/``y_test``
+        as well, which implied an early-stopping or holdout step the method never
+        performed. Both arguments were transformed and then never read.
         """
         from credit_risk.features.selection import filter_by_iv, filter_by_vif, sign_check  # noqa: PLC0415
         from credit_risk.features.woe import WoETransformer  # noqa: PLC0415
 
-        # Interaction features + ordinal encoding
-        X_train = _add_interaction_features(X_train)
-        X_test = _add_interaction_features(X_test)
+        # Interaction features + ordinal encoding. The z-score moments are learned here,
+        # once, and reused by every later call to _woe_transform.
+        self._interaction_stats = fit_interaction_stats(X_train)
+        X_train = _add_interaction_features(X_train, self._interaction_stats)
         X_train = _encode_categoricals(X_train)
-        X_test = _encode_categoricals(X_test)
 
         candidate_cols = _select_pd_features(X_train)
         if self.exclude_features is not None:
@@ -220,7 +270,7 @@ class PDScorecard:
         # empty for this population -- the joint-application and hardship blocks, for
         # instance. While missing values were being filled with the -9999 sentinel these
         # arrived at the binner as a *constant* column and were quietly dropped later by
-        # the IV filter, contributing nothing. Passing genuine NaN (Flaws.md finding N31)
+        # the IV filter, contributing nothing. Passing genuine NaN (FLAWS-N31)
         # instead leaves the binner with zero observations to fit, so they are excluded
         # here, explicitly and with a count, rather than crashing the binner or being
         # silently neutralised by a sentinel.
@@ -251,7 +301,7 @@ class PDScorecard:
         # code path that never fired), and the risk direction implied by the imputation
         # was arbitrary per feature -- missing FICO landed in the WORST band while missing
         # DTI landed in the BEST one, and for mths_since_recent_bc (missing = never held a
-        # bankcard) the assignment was actively the wrong sign (Flaws.md finding N31).
+        # bankcard) the assignment was actively the wrong sign (FLAWS-N31).
         woe_all.fit(X_train[candidate_cols], y_train)
 
         # Step 2: IV filter
@@ -318,21 +368,38 @@ class PDScorecard:
         self._logit_result = self._fit_logistic(X_woe_sel, y_train)
         logger.info("Logistic regression fitted.\n%s", self._logit_result.summary2())
 
-        # Step 6: Sign check
+        # Step 6: Sign check, iterated to convergence.
         # WoE = log(pct_good / pct_bad), so higher WoE = lower risk.
         # In logistic regression predicting P(bad=1), coefficients on WoE
         # features should be NEGATIVE (higher WoE → lower P(bad)).
-        coefs = pd.Series(
-            self._logit_result.params[self._selected_features].values,
-            index=self._selected_features,
-        )
-        violations = sign_check(coefs, expected_positive=False)
-        if violations:
-            logger.warning(
-                "Dropping %d features with wrong sign: %s. "
-                "Consider re-binning in a real project.",
-                len(violations), violations,
+        #
+        # This used to run exactly once: drop the violators, refit, stop. But the refit
+        # redistributes signal across the survivors and can flip a coefficient that was
+        # previously fine -- which is what happened to `mo_sin_rcnt_tl` (+0.0182, p=0.65).
+        # The delivered model then violated the very constraint the report advertises as a
+        # methodological guarantee, on the page after the claim. Loop until the constraint
+        # actually holds.
+        all_violations: list[str] = []
+        sign_check_rounds: list[dict[str, Any]] = []
+        for _round in range(1, _MAX_SIGN_CHECK_ROUNDS + 1):
+            coefs = pd.Series(
+                self._logit_result.params[self._selected_features].values,
+                index=self._selected_features,
             )
+            violations = sign_check(coefs, expected_positive=False)
+            sign_check_rounds.append({
+                "round": _round,
+                "n_features_in": int(len(self._selected_features)),
+                "dropped": sorted(violations),
+            })
+            if not violations:
+                break
+            logger.warning(
+                "Sign check round %d: dropping %d feature(s) with the wrong sign: %s. "
+                "Consider re-binning in a real project.",
+                _round, len(violations), violations,
+            )
+            all_violations.extend(violations)
             self._selected_features = [f for f in self._selected_features if f not in violations]
             if len(self._selected_features) == 0:
                 raise ValueError(
@@ -341,9 +408,21 @@ class PDScorecard:
                 )
             X_woe_sel = X_woe[self._selected_features]
             self._logit_result = self._fit_logistic(X_woe_sel, y_train)
+        else:
+            # Loop exhausted without a clean pass: refuse to ship a model that breaks the
+            # constraint the report states, rather than emitting it with a warning.
+            final_coefs = pd.Series(
+                self._logit_result.params[self._selected_features].values,
+                index=self._selected_features,
+            )
+            raise ValueError(
+                f"Sign check did not converge in {_MAX_SIGN_CHECK_ROUNDS} rounds; "
+                f"still violating: {sign_check(final_coefs, expected_positive=False)}"
+            )
 
         self._selection_stages["n_after_sign_check"] = int(len(self._selected_features))
-        self._selection_stages["dropped_by_sign_check"] = sorted(violations)
+        self._selection_stages["dropped_by_sign_check"] = sorted(set(all_violations))
+        self._selection_stages["sign_check_rounds"] = sign_check_rounds
         self._selection_stages["final_features"] = list(self._selected_features)
 
         # Step 7: Scorecard scaling
@@ -389,7 +468,7 @@ class PDScorecard:
             if woe_map:
                 bin_edges = getattr(binner, "bin_edges_", {}).get(feat, [])
                 for bin_id, woe_val in woe_map.items():
-                    points = (-woe_val * beta + alpha / n) * factor + offset / n
+                    points = -(woe_val * beta + alpha / n) * factor + offset / n
                     # Derive bin label from edges when available
                     try:
                         lo = bin_edges[bin_id]
@@ -442,7 +521,7 @@ class PDScorecard:
                             if pd.isna(woe_val):
                                 continue
                             woe_val = float(woe_val)
-                            points = (-woe_val * beta + alpha / n) * factor + offset / n
+                            points = -(woe_val * beta + alpha / n) * factor + offset / n
                             records.append({
                                 "feature": feat,
                                 "bin": str(bin_val),
@@ -486,11 +565,32 @@ class PDScorecard:
     # ── Prediction ─────────────────────────────────────────────────────────────
 
     def _woe_transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Prepare a raw frame exactly the way ``fit`` prepared the training frame.
+
+        This used to run ``_encode_categoricals`` only, skipping the interaction step that
+        ``fit`` performs. ``revol_util_x_new_acc`` exists nowhere else, so every scoring
+        call reindexed it into an all-NaN column; those rows fell into the binner's Missing
+        bin, which had zero training observations and therefore WoE = 0. The feature was
+        silently neutralised: the deployed model ran on 16 live predictors while the report
+        published 17, complete with coefficient, p-value and a points ladder for one that
+        never reached scoring. The z-score moments come from the fit (``_interaction_stats``)
+        rather than from ``X``, so the transform is identical regardless of what is scored.
+        """
+        X = _add_interaction_features(X, getattr(self, "_interaction_stats", None) or None)
         # Ordinal-encode categoricals (adds _enc columns if source cols present)
         X = _encode_categoricals(X)
         # Must pass all variables the WoE transformer was fitted on,
         # then select only the VIF-surviving features from the output.
         woe_vars = self._woe_transformer.variables_
+        # A model feature that is still absent after preparation cannot be scored. Silently
+        # reindexing it to NaN is what made the skew above invisible, so refuse instead.
+        missing_selected = [c for c in self._selected_features if c not in X.columns]
+        if missing_selected:
+            raise ValueError(
+                "Cannot score: selected model feature(s) absent from the frame after "
+                f"feature preparation: {missing_selected}. The scorecard was fitted on "
+                "them, so scoring without them silently changes the model."
+            )
         # Keep only columns that exist in X (safety for inference on slim frames)
         available = [c for c in woe_vars if c in X.columns]
         # NaN is preserved so scoring takes the same Missing bin the fit created.
@@ -505,7 +605,7 @@ class PDScorecard:
         Appendix A points table. When a calibrator is attached, ``score_to_pd`` and
         ``pd_to_score`` therefore describe the pre-recalibration mapping, not the PD that
         ``predict_proba`` returns; the report states this explicitly
-        (Flaws.md finding N4, related item).
+        (FLAWS-N4, related item).
         """
         X_woe = self._woe_transform(X)
         import statsmodels.api as sm  # noqa: PLC0415
@@ -546,7 +646,7 @@ class PDScorecard:
         Isotonic exposes ``.transform``; Platt scaling is a ``LogisticRegression`` and
         exposes ``.predict_proba``. The previous code called ``.transform`` unconditionally,
         so selecting Platt raised AttributeError and aborted the whole pipeline at the
-        portfolio scoring step (docs/AUDIT.md finding A23).
+        portfolio scoring step (AUDIT-A23).
         """
         raw_pd = np.asarray(raw_pd, dtype=float)
         if hasattr(self._calibrator, "predict_proba"):
@@ -567,7 +667,7 @@ class PDScorecard:
         describes the 2016+ era. Applying it across the whole 2007-2018 book left the
         development vintages over-predicting their realised default rate by up to ~53%,
         and that bias flowed straight into EL, RWA and every cutoff decision
-        (Flaws.md finding N5). Out-of-scope rows keep their raw PD.
+        (FLAWS-N5). Out-of-scope rows keep their raw PD.
 
         With no scope set, or no usable issue date, behaviour is unchanged (global apply).
         """
@@ -617,7 +717,7 @@ class PDScorecard:
 
         The report keys its calibration narrative off this: when it is False, every
         reported PD --- including those feeding EL, RWA and IFRS 9 staging --- is raw
-        model output (docs/AUDIT.md finding A1).
+        model output (AUDIT-A1).
         """
         return self._calibrator is not None
 
@@ -641,7 +741,7 @@ class PDScorecard:
         """Which binning implementation actually produced the WoE encoding.
 
         Surfaced so a silent fallback to the manual binner cannot pass unnoticed into the
-        report (Flaws.md finding N32).
+        report (FLAWS-N32).
         """
         from credit_risk.features.binning import binner_kind as _kind  # noqa: PLC0415
 

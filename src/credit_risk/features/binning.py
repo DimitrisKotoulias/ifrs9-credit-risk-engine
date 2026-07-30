@@ -6,7 +6,7 @@ Fallback: ``ManualMonotonicBinner``, quantile splits plus adjacent-bin merging u
 sign of the WoE differences is homogeneous.
 
 Neither path uses isotonic regression — earlier docstrings and report prose claimed it
-did (Flaws.md finding N30).
+did (FLAWS-N30).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _try_optbinning() -> bool:
     caught everything, so an unrelated failure inside optbinning (e.g. the sklearn >=1.6
     ``force_all_finite`` incompatibility) silently swapped in a completely different
     binner — different bins, different WoE, different surviving feature set — and the
-    report would still build, with different numbers (Flaws.md finding N32).
+    report would still build, with different numbers (FLAWS-N32).
     """
     try:
         from optbinning import BinningProcess  # noqa: F401,PLC0415
@@ -52,7 +52,7 @@ class OptBinningWrapper(BaseEstimator, TransformerMixin):
     Bins come from optbinning's optimal-binning solver at its default settings; this
     wrapper does not impose a trend constraint of its own. (It used to advertise a
     ``monotonic_trend`` parameter that was never forwarded to ``BinningProcess`` —
-    removed, Flaws.md findings N30/N45.)
+    removed, FLAWS-N30/N45.)
 
     Parameters
     ----------
@@ -121,7 +121,7 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
 
     Uses quantile-based initial binning then merges adjacent bins that violate
     monotonicity in WoE until the trend is monotone. This is a merge loop, not isotonic
-    regression (Flaws.md finding N30).
+    regression (FLAWS-N30).
     """
 
     def __init__(
@@ -140,7 +140,7 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
         self.bin_edges_: dict[str, list[float]] = {}
         self.woe_maps_: dict[str, dict[int, float]] = {}
         self.iv_: dict[str, float] = {}
-        # Missing values are a bin in their own right, with their own WoE (Flaws.md N31).
+        # Missing values are a bin in their own right, with their own WoE (the internal review log N31).
         self.missing_woe_: dict[str, float] = {}
         self.missing_count_: dict[str, int] = {}
 
@@ -164,7 +164,7 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
             # among missing rows. Previously they were routed to bin 0 and silently took
             # the lowest bin's WoE -- a different rule from the optbinning branch, so the
             # two binners produced different models from the same data, and the direction
-            # of the implied risk was arbitrary per feature (Flaws.md finding N31).
+            # of the implied risk was arbitrary per feature (FLAWS-N31).
             miss = np.isnan(x_arr)
             if miss.any():
                 mb = float(y_arr[miss].sum())
@@ -211,6 +211,24 @@ class ManualMonotonicBinner(BaseEstimator, TransformerMixin):
                 woes.append(woe_val)
                 ivs.append(iv_val)
             return woes, ivs
+
+        # Enforce the minimum bin share. `min_bin_frac` was stored on the instance and
+        # then never consulted, so the manual binner could emit bins holding a handful of
+        # rows whose WoE is estimated from almost nothing -- while the optbinning path
+        # passed the same parameter through as `min_bin_size`. Merge undersized bins into
+        # their neighbour before the monotonicity pass.
+        min_bin_n = max(1, int(self.min_bin_frac * n_total))
+        for _ in range(100):
+            bin_ids = np.digitize(x, edges[1:-1], right=True)
+            sizes = [
+                int(((bin_ids == b) & valid_mask).sum()) for b in range(len(edges) - 1)
+            ]
+            if len(edges) <= 3 or min(sizes) >= min_bin_n:
+                break
+            smallest = int(np.argmin(sizes))
+            # Drop the edge that merges the undersized bin into an adjacent one.
+            drop = smallest if smallest < len(edges) - 2 else smallest - 1
+            edges = edges[:drop + 1] + edges[drop + 2:]
 
         # Merge bins to enforce monotonicity (descending WoE → higher score = lower PD)
         for _ in range(100):
@@ -267,7 +285,17 @@ def get_binner(
     min_bin_frac: float = 0.05,
     **_extra: Any,
 ) -> OptBinningWrapper | ManualMonotonicBinner:
-    """Return best available binner (optbinning if installed, else manual fallback)."""
+    """Return best available binner (optbinning if installed, else manual fallback).
+
+    Unknown keyword arguments raise. They used to be swallowed silently, so a typo in a
+    binning parameter -- or a knob that one binner supports and the other does not --
+    produced a model fitted with defaults and no indication anything had been ignored.
+    """
+    if _extra:
+        raise TypeError(
+            f"get_binner() received unknown keyword argument(s): {sorted(_extra)}. "
+            "Silently ignoring them would hide a mis-specified binning configuration."
+        )
     if _try_optbinning():
         logger.info("Using optbinning for WoE/IV binning.")
         return OptBinningWrapper(

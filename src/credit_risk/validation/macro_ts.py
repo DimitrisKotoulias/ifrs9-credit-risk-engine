@@ -28,11 +28,21 @@ logger = logging.getLogger(__name__)
 _MACRO_COLS = ["UNRATE", "GDP_growth", "FEDFUNDS", "CPI_inflation", "HPI_growth"]
 
 
-def build_quarterly_macro_frame(df_train: pd.DataFrame, macro_path: str) -> pd.DataFrame:
+def build_quarterly_macro_frame(
+    df_train: pd.DataFrame, macro_path: str, macro_lag_quarters: int = 0
+) -> pd.DataFrame:
     """Assemble the quarterly (default_rate + macro) frame used for the diagnostics.
 
-    Mirrors the contemporaneous merge inside ``fit_macro_model`` so the two analyses
-    describe the same series.
+    ``macro_lag_quarters`` shifts the macro series forward so quarter *t* is paired with
+    macro data from *t - lag*, the way ``fit_macro_model`` does in production. The
+    docstring used to promise that this mirrored the production merge; it did not --- this
+    merge was contemporaneous while the fitted model uses a two-quarter lag, so the Granger
+    test that documents the lag choice ran on a differently-aligned series from the one the
+    lag is applied to. Pass ``cfg.macro.unrate_lag`` to align them.
+
+    Also carries ``n_loans`` per quarter, so downstream consumers (the PiT/TTC
+    decomposition) can weight by cohort size instead of treating a 200-loan quarter and a
+    40,000-loan quarter as equals.
     """
     macro_df = pd.read_csv(macro_path)
     d = df_train.copy()
@@ -41,7 +51,13 @@ def build_quarterly_macro_frame(df_train: pd.DataFrame, macro_path: str) -> pd.D
     )
     q = d.groupby("quarter")["target"].agg(["count", "sum"])
     q["default_rate"] = q["sum"] / q["count"]
-    q = q.reset_index()
+    q = q.rename(columns={"count": "n_loans"}).reset_index()
+
+    if macro_lag_quarters:
+        macro_df = macro_df.sort_values("quarter").copy()
+        _cols = [c for c in macro_df.columns if c != "quarter"]
+        macro_df[_cols] = macro_df[_cols].shift(macro_lag_quarters)
+
     merged = q.merge(macro_df, on="quarter", how="inner").sort_values("quarter")
     return merged.reset_index(drop=True)
 
